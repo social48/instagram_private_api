@@ -69,6 +69,15 @@ class ClientCookieJar(compat_cookiejar.CookieJar):
         elif cookie_repr:
             self._cookies = compat_pickle.loads(cookie_repr.encode('utf-8'))
 
+    @property
+    def format(self):
+        return self._format
+
+    @format.setter
+    def format(self, new_format):
+        if new_format in ('dict', 'json', 'pickle', 'str', 'bytes'):
+            self._format = new_format
+
     def set_cookies_from_dict(self, cookie_dict, overwrite=True, domain=None, path=None):
         """
         A dictionary of cookies, optionally nested by domain and/or path
