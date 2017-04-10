@@ -19,7 +19,7 @@ from .errors import (
     ClientErrorCodes, ClientError, ClientLoginError, ClientLoginRequiredError,
     ClientCookieExpiredError, ClientThrottledError)
 from .constants import Constants
-from .http import ClientCookieJar
+from .cookiejar import ClientCookieJar
 from .endpoints import (
     AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
     FriendshipsEndpointsMixin, LiveEndpointsMixin, MediaEndpointsMixin,
@@ -55,7 +55,7 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             - **drop_incompat_key**: Remove api object keys that is not in the public API. Default: False
             - **timeout**: Timeout interval in seconds. Default: 15
             - **api_url**: Override the default api url base
-            - **cookie**: Saved cookie string from a previous session
+            - **cookie**: Saved cookie string or dict from a previous session
             - **settings**: A dict of settings from a previous session
             - **on_login**: Callback after successful login
             - **proxy**: Specify a proxy ex: 'http://127.0.0.1:8888' (ALPHA)
@@ -120,9 +120,9 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
                 kwargs.pop('phone_chipset', None) or user_settings.get('phone_chipset') or
                 Constants.PHONE_CHIPSET)
 
-        cookie_string = kwargs.pop('cookie', None) or user_settings.get('cookie')
-        cookie_jar = ClientCookieJar(cookie_string=cookie_string)
-        if cookie_string and cookie_jar.expires_earliest and int(time.time()) >= cookie_jar.expires_earliest:
+        cookie_repr = kwargs.pop('cookie', None) or user_settings.get('cookie')
+        cookie_jar = ClientCookieJar(cookie_repr=cookie_repr)
+        if cookie_repr and cookie_jar.expires_earliest and int(time.time()) >= cookie_jar.expires_earliest:
             raise ClientCookieExpiredError('Oldest cookie expired at %s' % cookie_jar.expires_earliest)
         cookie_handler = compat_urllib_request.HTTPCookieProcessor(cookie_jar)
 
@@ -162,7 +162,9 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             kwargs.pop('ad_id', None) or user_settings.get('ad_id') or
             self.generate_adid())
 
-        if not cookie_string:   # [TODO] There's probably a better way than to depend on cookie_string
+        # [TODO] There's probably a better way than to depend on cookie_string
+        # or not self.token or not self.rank_token:
+        if not cookie_repr:   
             if not self.username or not self.password:
                 raise ClientLoginRequiredError('login_required', code=400)
             self.login()
