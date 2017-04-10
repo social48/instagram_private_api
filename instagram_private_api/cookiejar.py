@@ -59,15 +59,18 @@ class ClientCookieJar(compat_cookiejar.CookieJar):
             cookie_kwargs[key] = func(cookie_kwargs)
 
         return compat_cookiejar.Cookie(**cookie_kwargs)
-
+    
     def __init__(self, cookie_repr=None, policy=None):
         compat_cookiejar.CookieJar.__init__(self, policy)
         self._format = "pickle"
-        if isinstance(cookie_repr, dict):
-            self._format = "dict"
-            self.set_cookies_from_dict(cookie_repr)
-        elif cookie_repr:
-            self._cookies = compat_pickle.loads(cookie_repr.encode('utf-8'))
+        if cookie_repr:
+            if isinstance(cookie_repr, dict):
+                self._format = "dict"
+                self.set_cookies_from_dict(cookie_repr)
+            elif isinstance(cookie_repr, bytes):
+                self._cookies = compat_pickle.loads(cookie_string)
+            else:
+                self._cookies = compat_pickle.loads(cookie_repr.encode('utf-8'))
 
     @property
     def format(self):
@@ -114,6 +117,11 @@ class ClientCookieJar(compat_cookiejar.CookieJar):
 
     @property
     def expires_earliest(self):
+        # if len(self) > 0:
+        #     # sometimes a cookie has no expiration?
+        #     return min([cookie.expires for cookie in self if cookie.expires])
+        # return None
+        # Compatibility Note: the default argument was added to min() in Python 3.4
         return min([cookie.expires for cookie in self], default=None)
 
     def dump(self, use_format=None):
