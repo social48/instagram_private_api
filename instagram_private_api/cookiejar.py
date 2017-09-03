@@ -122,7 +122,7 @@ class ClientCookieJar(compat_cookiejar.CookieJar):
         #     return min([cookie.expires for cookie in self if cookie.expires])
         # return None
         # Compatibility Note: the default argument was added to min() in Python 3.4
-        return min([cookie.expires for cookie in self], default=None)
+        return min([(cookie.expires or 0) for cookie in self], default=None)
 
     def dump(self, use_format=None):
         """
