@@ -1,7 +1,11 @@
+import warnings
+
+from .common import ClientExperimentalWarning
 from ..compatpatch import ClientCompatPatch
 
 
 class FriendshipsEndpointsMixin(object):
+    """For endpoints in ``/friendships/``."""
 
     def autocomplete_user_list(self):
         """User list for autocomplete"""
@@ -22,7 +26,7 @@ class FriendshipsEndpointsMixin(object):
             - **max_id**: For pagination
         :return:
         """
-        endpoint = 'friendships/%(user_id)s/following/' % {'user_id': user_id}
+        endpoint = 'friendships/{user_id!s}/following/'.format(**{'user_id': user_id})
         query = {
             'rank_token': self.rank_token,
         }
@@ -42,7 +46,7 @@ class FriendshipsEndpointsMixin(object):
             - **max_id**: For pagination
         :return:
         """
-        endpoint = 'friendships/%(user_id)s/followers/' % {'user_id': user_id}
+        endpoint = 'friendships/{user_id!s}/followers/'.format(**{'user_id': user_id})
         query = {
             'rank_token': self.rank_token,
         }
@@ -81,7 +85,7 @@ class FriendshipsEndpointsMixin(object):
                     "is_private": false
                 }
         """
-        endpoint = 'friendships/show/%(user_id)s/' % {'user_id': user_id}
+        endpoint = 'friendships/show/{user_id!s}/'.format(**{'user_id': user_id})
         res = self._call_api(endpoint)
         return res
 
@@ -136,7 +140,7 @@ class FriendshipsEndpointsMixin(object):
                     }
                 }
         """
-        endpoint = 'friendships/create/%(user_id)s/' % {'user_id': user_id}
+        endpoint = 'friendships/create/{user_id!s}/'.format(**{'user_id': user_id})
         params = {'user_id': user_id, 'radio_type': self.radio_type}
         params.update(self.authenticated_params)
         res = self._call_api(endpoint, params=params)
@@ -163,7 +167,7 @@ class FriendshipsEndpointsMixin(object):
                     "is_private": false
                 }
         """
-        endpoint = 'friendships/destroy/%(user_id)s/' % {'user_id': user_id}
+        endpoint = 'friendships/destroy/{user_id!s}/'.format(**{'user_id': user_id})
         params = {'user_id': user_id, 'radio_type': self.radio_type}
         params.update(self.authenticated_params)
         res = self._call_api(endpoint, params=params)
@@ -189,8 +193,191 @@ class FriendshipsEndpointsMixin(object):
                     "is_private": false
                 }
         """
-        endpoint = 'friendships/block/%(user_id)s/' % {'user_id': user_id}
+        endpoint = 'friendships/block/{user_id!s}/'.format(**{'user_id': user_id})
         params = {'user_id': user_id}
         params.update(self.authenticated_params)
         res = self._call_api(endpoint, params=params)
+        return res
+
+    def friendships_unblock(self, user_id):
+        """
+        Block a user
+
+        :param user_id: User id
+        :return:
+            .. code-block:: javascript
+
+                {
+                    "status": "ok",
+                    "incoming_request": false,
+                    "is_blocking_reel": false,
+                    "followed_by": false,
+                    "is_muting_reel": false,
+                    "outgoing_request": false,
+                    "following": false,
+                    "blocking": false,
+                    "is_private": false
+                }
+        """
+        endpoint = 'friendships/unblock/{user_id!s}/'.format(**{'user_id': user_id})
+        params = {'user_id': user_id}
+        params.update(self.authenticated_params)
+        res = self._call_api(endpoint, params=params)
+        return res
+
+    def block_friend_reel(self, user_id):
+        """
+        Hide your stories from a specific user
+
+        :param user_id: User id
+        :return:
+            .. code-block:: javascript
+
+                {
+                    "status": "ok",
+                    "incoming_request": false,
+                    "is_blocking_reel": true,
+                    "followed_by": false,
+                    "is_muting_reel": false,
+                    "outgoing_request": false,
+                    "following": false,
+                    "blocking": true,
+                    "is_private": false
+                }
+        """
+        endpoint = 'friendships/block_friend_reel/{user_id!s}/'.format(**{'user_id': user_id})
+        params = {'source': 'main_feed'}
+        params.update(self.authenticated_params)
+        res = self._call_api(endpoint, params=params)
+        return res
+
+    def unblock_friend_reel(self, user_id):
+        """
+        Unhide your stories from a specific user
+
+        :param user_id: User id
+        :return:
+            .. code-block:: javascript
+
+                {
+                    "status": "ok",
+                    "incoming_request": false,
+                    "is_blocking_reel": false,
+                    "followed_by": false,
+                    "is_muting_reel": false,
+                    "outgoing_request": false,
+                    "following": false,
+                    "blocking": true,
+                    "is_private": false
+                }
+        """
+        endpoint = 'friendships/unblock_friend_reel/{user_id!s}/'.format(**{'user_id': user_id})
+        res = self._call_api(endpoint, params=self.authenticated_params)
+        return res
+
+    def set_reel_block_status(self, user_ids, block_status='block'):
+        """
+        Unhide your stories from a specific user
+
+        :param user_ids: list of user IDs
+        :param block_status: One of 'block', 'unblock'
+        :return:
+            .. code-block:: javascript
+
+                {
+                    "friendship_statuses": {
+                        "123456790": {
+                            "following": true,
+                            "is_private": false,
+                            "incoming_request": false,
+                            "outgoing_request": false,
+                            "is_blocking_reel": true,
+                            "is_muting_reel": false
+                        },
+                        "123456791": {
+                            "following": true,
+                            "is_private": false,
+                            "incoming_request": false,
+                            "outgoing_request": false,
+                            "is_blocking_reel": true,
+                            "is_muting_reel": false
+                        }
+                    },
+                    "status": "ok"
+                }
+        """
+
+        if block_status not in ['block', 'unblock']:
+            raise ValueError('Invalid block_status: {0!s}'.format(block_status))
+        if not isinstance(user_ids, list):
+            user_ids = [user_ids]
+        params = {'source': 'settings'}
+        user_block_statuses = {}
+        for user_id in user_ids:
+            user_block_statuses[str(user_id)] = block_status
+        params['user_block_statuses'] = user_block_statuses
+        params.update(self.authenticated_params)
+        return self._call_api('friendships/set_reel_block_status/', params=params)
+
+    def blocked_reels(self):
+        """
+        Get list of users from whom you've hid your stories
+        """
+        warnings.warn('This endpoint is experimental. Do not use.', ClientExperimentalWarning)
+        res = self._call_api('friendships/blocked_reels/', params=self.authenticated_params)
+        if self.auto_patch and res.get('users'):
+            [ClientCompatPatch.list_user(u, drop_incompat_keys=self.drop_incompat_keys)
+             for u in res.get('users', [])]
+        return res
+
+    def enable_post_notifications(self, user_id):
+        """
+        Turn on post notifications for specified user.
+
+        :param user_id:
+        :return:
+        """
+        res = self._call_api(
+            'friendships/favorite/{user_id!s}/'.format(**{'user_id': user_id}),
+            params=self.authenticated_params)
+        return res
+
+    def disable_post_notifications(self, user_id):
+        """
+        Turn off post notifications for specified user.
+
+        :param user_id:
+        :return:
+        """
+        res = self._call_api(
+            'friendships/unfavorite/{user_id!s}/'.format(**{'user_id': user_id}),
+            params=self.authenticated_params)
+        return res
+
+    def ignore_user(self, user_id):
+        """
+        Ignore a user's follow request.
+
+        :param user_id:
+        :return:
+        """
+        params = {'user_id': user_id, 'radio_type': self.radio_type}
+        params.update(self.authenticated_params)
+        res = self._call_api(
+            'friendships/ignore/{user_id!s}/'.format(**{'user_id': user_id}),
+            params=params)
+        return res
+
+    def remove_follower(self, user_id):
+        """
+        Remove a follower.
+
+        :param user_id:
+        :return:
+        """
+        params = {'user_id': user_id, 'radio_type': self.radio_type}
+        params.update(self.authenticated_params)
+        res = self._call_api(
+            'friendships/remove_follower/{user_id!s}/'.format(**{'user_id': user_id}),
+            params=params)
         return res

@@ -60,17 +60,17 @@ class ClientCookieJar(compat_cookiejar.CookieJar):
 
         return compat_cookiejar.Cookie(**cookie_kwargs)
     
-    def __init__(self, cookie_repr=None, policy=None):
+    def __init__(self, cookie_string=None, policy=None):
         compat_cookiejar.CookieJar.__init__(self, policy)
         self._format = "pickle"
-        if cookie_repr:
-            if isinstance(cookie_repr, dict):
+        if cookie_string:
+            if isinstance(cookie_string, dict):
                 self._format = "dict"
                 self.set_cookies_from_dict(cookie_repr)
-            elif isinstance(cookie_repr, bytes):
+            elif isinstance(cookie_string, bytes):
                 self._cookies = compat_pickle.loads(cookie_string)
             else:
-                self._cookies = compat_pickle.loads(cookie_repr.encode('utf-8'))
+                self._cookies = compat_pickle.loads(cookie_string.encode('utf-8'))
 
     @property
     def format(self):

@@ -3,9 +3,17 @@ import hmac
 import base64
 import hashlib
 from random import randint
+import os
+from datetime import datetime
 
 
 def gen_user_breadcrumb(size):
+    """
+    Used in comments posting.
+
+    :param size:
+    :return:
+    """
     key = 'iN4$aGr0m'
     dt = int(time.time() * 1000)
 
@@ -14,12 +22,12 @@ def gen_user_breadcrumb(size):
 
     text_change_event_count = max(1, size / randint(3, 5))
 
-    data = '%(size)s %(elapsed)s %(count)s %(dt)s' % {
+    data = '{size!s} {elapsed!s} {count!s} {dt!s}'.format(**{
         'size': size, 'elapsed': time_elapsed, 'count': text_change_event_count, 'dt': dt
-    }
-    return '%s\n%s\n' % (
+    })
+    return '{0!s}\n{1!s}\n'.format(
         base64.b64encode(hmac.new(key.encode('ascii'), data.encode('ascii'), digestmod=hashlib.sha256).digest()),
-        base64.b64encode(data))
+        base64.b64encode(data.encode('ascii')))
 
 
 class Chunk(object):
@@ -45,6 +53,20 @@ class Chunk(object):
         return self.end - self.start
 
 
+def get_file_size(fp):
+    """
+    Get the file size for a file-like object
+
+    :param fp: file-like object
+    :return:
+    """
+    original_file_position = fp.tell()
+    fp.seek(0, os.SEEK_END)
+    file_len = fp.tell()
+    fp.seek(original_file_position, os.SEEK_SET)
+    return file_len
+
+
 def chunk_generator(chunk_count, chunk_size, file_data):
     """
     Generic chunk generator logic
@@ -54,12 +76,21 @@ def chunk_generator(chunk_count, chunk_size, file_data):
     :param file_data: bytes to be split into chunk
     :return:
     """
-    total_len = len(file_data)
+    try:
+        total_len = len(file_data)
+        is_fp = False
+    except TypeError:
+        total_len = get_file_size(file_data)
+        is_fp = True
     for i in range(chunk_count):
         start_range = i * chunk_size
         end_range = (start_range + chunk_size) if i < (chunk_count - 1) else total_len
         chunk_info = Chunk(i, start_range, end_range, chunk_count)
-        yield chunk_info, file_data[chunk_info.start: chunk_info.end]
+        if is_fp:
+            file_data.seek(chunk_info.start, os.SEEK_SET)
+            yield chunk_info, file_data.read(chunk_info.length)
+        else:
+            yield chunk_info, file_data[chunk_info.start: chunk_info.end]
 
 
 def max_chunk_size_generator(chunk_size, file_data):
@@ -70,7 +101,11 @@ def max_chunk_size_generator(chunk_size, file_data):
     :param file_data: bytes data
     :return:
     """
-    chunk_count, final_chunk = divmod(len(file_data), chunk_size)
+    try:
+        file_len = len(file_data)
+    except TypeError:
+        file_len = get_file_size(file_data)
+    chunk_count, final_chunk = divmod(file_len, chunk_size)
     if final_chunk:
         chunk_count += 1
     return chunk_generator(chunk_count, chunk_size, file_data)
@@ -84,19 +119,74 @@ def max_chunk_count_generator(chunk_count, file_data):
     :param file_data: bytes data
     :return:
     """
-    chunk_size = len(file_data) // chunk_count
+    try:
+        # bytes data
+        chunk_size = len(file_data) // chunk_count
+    except TypeError:
+        # file like object
+        file_len = get_file_size(file_data)
+        chunk_size = file_len // chunk_count
+
     return chunk_generator(chunk_count, chunk_size, file_data)
 
 
-class InstagramID:
+def ig_chunk_generator(file_data, max_chunk_size=(500 * 1024)):
+    """
+    Generate chunks in similar pattern to IG
+
+    :param file_data: bytes data
+    :param max_chunk_size:
+    :return:
+    """
+    try:
+        total_len = len(file_data)
+        is_fp = False
+    except TypeError:
+        total_len = get_file_size(file_data)
+        is_fp = True
+
+    first_chunk_size = 200000
+    max_chunk_size = max_chunk_size or (500 * 1024)
+    chunks_generated = []
+    last_yield_dt = None
+
+    while sum(chunks_generated) < total_len:
+        if not chunks_generated or total_len <= first_chunk_size:
+            # first chunk
+            chunk = Chunk(0, 0, min(first_chunk_size, total_len), 0)
+            chunks_generated.append(chunk.length)
+        else:
+            chunk_elapsed_time = datetime.now() - last_yield_dt
+            try:
+                new_chunk_size = 5000 * chunks_generated[-1] / int(chunk_elapsed_time.total_seconds() * 1000)
+            except ZeroDivisionError:
+                new_chunk_size = max_chunk_size
+            new_chunk_size = min(max_chunk_size, new_chunk_size)
+            chunk_start = sum(chunks_generated)
+            chunk_end = min(chunk_start + new_chunk_size, total_len)
+            chunk = Chunk(
+                len(chunks_generated), sum(chunks_generated), chunk_end,
+                0 if chunk_end < total_len else len(chunks_generated) + 1)
+            chunks_generated.append(chunk.length)
+
+        last_yield_dt = datetime.now()
+        if is_fp:
+            file_data.seek(chunk.start, os.SEEK_SET)
+            yield chunk, file_data.read(chunk.length)
+        else:
+            yield chunk, file_data[chunk.start: chunk.end]
+
+
+class InstagramID(object):
     """
     Utility class to convert between IG's internal numeric ID and the shortcode used in weblinks.
     Does NOT apply to private accounts.
     """
     ENCODING_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
 
-    @classmethod
-    def _encode(cls, num, alphabet=ENCODING_CHARS):
+    @staticmethod
+    def _encode(num, alphabet=ENCODING_CHARS):
+        """Covert a numeric value to a shortcode."""
         if num == 0:
             return alphabet[0]
         arr = []
@@ -108,8 +198,9 @@ class InstagramID:
         arr.reverse()
         return ''.join(arr)
 
-    @classmethod
-    def _decode(cls, shortcode, alphabet=ENCODING_CHARS):
+    @staticmethod
+    def _decode(shortcode, alphabet=ENCODING_CHARS):
+        """Covert a shortcode to a numeric value."""
         base = len(alphabet)
         strlen = len(shortcode)
         num = 0
@@ -128,7 +219,7 @@ class InstagramID:
         :param media_id:
         :return:
         """
-        return 'https://www.instagram.com/p/%s/' % cls.shorten_media_id(media_id)
+        return 'https://www.instagram.com/p/{0!s}/'.format(cls.shorten_media_id(media_id))
 
     @classmethod
     def shorten_media_id(cls, media_id):

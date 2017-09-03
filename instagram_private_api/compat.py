@@ -1,3 +1,5 @@
+# flake8: noqa
+# pylint: disable=unused-import
 try:
     import urllib.request as compat_urllib_request
 except ImportError:  # Python 2
@@ -32,3 +34,8 @@ try:
     import cPickle as compat_pickle
 except ImportError:
     import pickle as compat_pickle
+
+try:
+    import http.client as compat_http_client
+except ImportError:  # Python 2
+    import httplib as compat_http_client

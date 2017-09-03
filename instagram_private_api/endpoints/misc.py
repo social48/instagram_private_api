@@ -1,9 +1,12 @@
 import warnings
+
+from .common import ClientDeprecationWarning
 from ..constants import Constants
 from ..compatpatch import ClientCompatPatch
 
 
 class MiscEndpointsMixin(object):
+    """For miscellaneous functions."""
 
     def sync(self, prelogin=False):
         """Synchronise experiments."""
@@ -20,7 +23,11 @@ class MiscEndpointsMixin(object):
             params.update(self.authenticated_params)
         return self._call_api('qe/sync/', params=params)
 
-    def expose(self, experiment='ig_android_profile_contextual_feed'):
+    def expose(self, experiment='ig_android_profile_contextual_feed'):  # pragma: no cover
+        warnings.warn(
+            'This endpoint is believed to be obsolete. Do not use.',
+            ClientDeprecationWarning)
+
         params = {
             'id': self.authenticated_user_id,
             'experiment': experiment
@@ -83,7 +90,7 @@ class MiscEndpointsMixin(object):
         """
         query = {'url': url}
         query.update(kwargs)
-        res = self._call_api('oembed', query=query)
+        res = self._call_api('oembed/', query=query)
         return res
 
     def translate(self, object_id, object_type):
@@ -115,17 +122,6 @@ class MiscEndpointsMixin(object):
         res = self._call_api('language/bulk_translate/', query=query)
         return res
 
-    def location_fb_search(self, query):
-        """
-        Search for locations by query text
-
-        :param query: search terms
-        :return:
-        """
-        return self._call_api(
-            'fbsearch/places/',
-            query={'ranked_token': self.rank_token, 'query': query})
-
     def top_search(self, query):
         """
         Search for top matching hashtags, users, locations
@@ -147,10 +143,12 @@ class MiscEndpointsMixin(object):
         :param sticker_type: One of ['static_stickers']
         :param location: dict containing 'lat', 'lng', 'horizontalAccuracy'.
                          Example: {'lat': '', 'lng': '', 'horizontalAccuracy': ''}
+                         'horizontalAccuracy' is a float in meters representing the estimated horizontal accuracy
+                         https://developer.android.com/reference/android/location/Location.html#getAccuracy()
         :return:
         """
         if sticker_type not in ['static_stickers']:
-            raise ValueError('Invalid sticker_type: %s' % sticker_type)
+            raise ValueError('Invalid sticker_type: {0!s}'.format(sticker_type))
         if location and not ('lat' in location and 'lng' in location and 'horizontalAccuracy' in location):
             raise ValueError('Invalid location')
         params = {

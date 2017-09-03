@@ -12,31 +12,44 @@ from datetime import datetime
 import gzip
 from io import BytesIO
 import warnings
+from socket import timeout, error as SocketError
+from ssl import SSLError
 from .compat import (
     compat_urllib_parse, compat_urllib_error,
-    compat_urllib_request, compat_urllib_parse_urlparse)
+    compat_urllib_request, compat_urllib_parse_urlparse,
+    compat_http_client)
 from .errors import (
-    ClientErrorCodes, ClientError, ClientLoginError, ClientLoginRequiredError,
-    ClientCookieExpiredError, ClientThrottledError)
+    ClientErrorCodes, ClientError, ClientLoginError,
+    ClientLoginRequiredError, ClientCookieExpiredError,
+    ClientThrottledError, ClientConnectionError
+)
 from .constants import Constants
 from .cookiejar import ClientCookieJar
 from .endpoints import (
     AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
     FriendshipsEndpointsMixin, LiveEndpointsMixin, MediaEndpointsMixin,
     MiscEndpointsMixin, LocationsEndpointsMixin, TagsEndpointsMixin,
-    UsersEndpointsMixin, UploadEndpointsMixin, UsertagsEndpointsMixin
+    UsersEndpointsMixin, UploadEndpointsMixin, UsertagsEndpointsMixin,
+    CollectionsEndpointsMixin,
+    ClientDeprecationWarning, ClientPendingDeprecationWarning,
+    ClientExperimentalWarning
 )
 
 logger = logging.getLogger(__name__)
+# Force Client deprecation warnings to always appear
+warnings.simplefilter('always', ClientDeprecationWarning)
+warnings.simplefilter('always', ClientPendingDeprecationWarning)
+warnings.simplefilter('default', ClientExperimentalWarning)
 
 
 class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
              FriendshipsEndpointsMixin, LiveEndpointsMixin, MediaEndpointsMixin,
              MiscEndpointsMixin, LocationsEndpointsMixin, TagsEndpointsMixin,
              UsersEndpointsMixin, UploadEndpointsMixin, UsertagsEndpointsMixin,
-             object):
+             CollectionsEndpointsMixin, object):
+    """Main API client class for the private app api."""
 
-    API_URL = 'https://i.instagram.com/api/v1/'
+    API_URL = 'https://i.instagram.com/api/{version!s}/'
 
     USER_AGENT = Constants.USER_AGENT
     IG_SIG_KEY = Constants.IG_SIG_KEY
@@ -120,10 +133,10 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
                 kwargs.pop('phone_chipset', None) or user_settings.get('phone_chipset') or
                 Constants.PHONE_CHIPSET)
 
-        cookie_repr = kwargs.pop('cookie', None) or user_settings.get('cookie')
-        cookie_jar = ClientCookieJar(cookie_repr=cookie_repr)
-        if cookie_repr and cookie_jar.expires_earliest and int(time.time()) >= cookie_jar.expires_earliest:
-            raise ClientCookieExpiredError('Oldest cookie expired at %s' % cookie_jar.expires_earliest)
+        cookie_string = kwargs.pop('cookie', None) or user_settings.get('cookie')
+        cookie_jar = ClientCookieJar(cookie_string=cookie_string)
+        if cookie_string and cookie_jar.expires_earliest and int(time.time()) >= cookie_jar.expires_earliest:
+            raise ClientCookieExpiredError('Oldest cookie expired at {0!s}'.format(cookie_jar.expires_earliest))
         cookie_handler = compat_urllib_request.HTTPCookieProcessor(cookie_jar)
 
         proxy_handler = None
@@ -132,10 +145,10 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             warnings.warn('Proxy support is alpha.', UserWarning)
             parsed_url = compat_urllib_parse_urlparse(proxy)
             if parsed_url.netloc and parsed_url.scheme:
-                proxy_address = '%s://%s' % (parsed_url.scheme, parsed_url.netloc)
+                proxy_address = '{0!s}://{1!s}'.format(parsed_url.scheme, parsed_url.netloc)
                 proxy_handler = compat_urllib_request.ProxyHandler({'https': proxy_address})
             else:
-                raise ValueError('Invalid proxy argument: %s' % proxy)
+                raise ValueError('Invalid proxy argument: {0!s}'.format(proxy))
         handlers = []
         if proxy_handler:
             handlers.append(proxy_handler)
@@ -169,6 +182,9 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
                 raise ClientLoginRequiredError('login_required', code=400)
             self.login()
 
+        self.logger.debug('USERAGENT: {0!s}'.format(self.user_agent))
+        super(Client, self).__init__()
+
     @property
     def settings(self):
         """Helper property that extracts the settings that you should cache
@@ -177,19 +193,7 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             'uuid': self.uuid,
             'device_id': self.device_id,
             'ad_id': self.ad_id,
-            'signature_key': self.signature_key,
-            'key_version': self.key_version,
-            'ig_capabilities': self.ig_capabilities,
-            'app_version': self.app_version,
-            'android_release': self.android_release,
-            'android_version': self.android_version,
-            'phone_manufacturer': self.phone_manufacturer,
-            'phone_device': self.phone_device,
-            'phone_model': self.phone_model,
-            'phone_dpi': self.phone_dpi,
-            'phone_resolution': self.phone_resolution,
-            'phone_chipset': self.phone_chipset,
-            'cookie': self.opener.cookie_jar.dump(),
+            'cookie': self.cookie_jar.dump(),
             'created_ts': int(time.time())
         }
 
@@ -212,8 +216,8 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
         """Override the useragent string with your own"""
         mobj = re.search(Constants.USER_AGENT_EXPRESSION, value)
         if not mobj:
-            raise ValueError('User-agent specified does not fit format required: %s' %
-                             Constants.USER_AGENT_EXPRESSION)
+            raise ValueError('User-agent specified does not fit format required: {0!s}'.format(
+                Constants.USER_AGENT_EXPRESSION))
         self.app_version = mobj.group('app_version')
         self.android_release = mobj.group('android_release')
         self.android_version = int(mobj.group('android_version'))
@@ -224,8 +228,8 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
         self.phone_resolution = mobj.group('resolution')
         self.phone_chipset = mobj.group('chipset')
 
-    @classmethod
-    def generate_useragent(cls, **kwargs):
+    @staticmethod
+    def generate_useragent(**kwargs):
         """
         Helper method to generate a useragent string based on device parameters
 
@@ -252,8 +256,8 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             'resolution': kwargs.pop('phone_resolution', None) or Constants.PHONE_RESOLUTION,
             'chipset': kwargs.pop('phone_chipset', None) or Constants.PHONE_CHIPSET}
 
-    @classmethod
-    def validate_useragent(cls, value):
+    @staticmethod
+    def validate_useragent(value):
         """
         Helper method to validate a useragent string for format correctness
 
@@ -262,8 +266,8 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
         """
         mobj = re.search(Constants.USER_AGENT_EXPRESSION, value)
         if not mobj:
-            raise ValueError('User-agent specified does not fit format required: %s' %
-                             Constants.USER_AGENT_EXPRESSION)
+            raise ValueError('User-agent specified does not fit format required: {0!s}'.format(
+                Constants.USER_AGENT_EXPRESSION))
         parse_params = {
             'app_version': mobj.group('app_version'),
             'android_version': int(mobj.group('android_version')),
@@ -320,7 +324,7 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
     def rank_token(self):
         if not self.authenticated_user_id:
             return None
-        return '%s_%s' % (self.authenticated_user_id, self.uuid)
+        return '{0!s}_{1!s}'.format(self.authenticated_user_id, self.uuid)
 
     @property
     def authenticated_params(self):
@@ -345,7 +349,7 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             'Accept-Encoding': 'gzip, deflate',
             'X-IG-Capabilities': self.ig_capabilities,
             'X-IG-Connection-Type': 'WIFI',
-            'X-IG-Connection-Speed': '%dkbps' % random.randint(1000, 5000),
+            'X-IG-Connection-Speed': '{0:d}kbps'.format(random.randint(1000, 5000)),
         }
 
     @property
@@ -353,9 +357,15 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
         """For use in certain endpoints"""
         return 'wifi-none'
 
-    def _generate_signature(self, input):
+    def _generate_signature(self, data):
+        """
+        Generates the signature for a data string
+
+        :param data: content to be signed
+        :return:
+        """
         return hmac.new(
-            self.signature_key.encode('ascii'), input.encode('ascii'),
+            self.signature_key.encode('ascii'), data.encode('ascii'),
             digestmod=hashlib.sha256).hexdigest()
 
     @classmethod
@@ -385,7 +395,7 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
         :param seed: Seed value to generate a consistent device ID
         :return:
         """
-        return 'android-%s' % cls.generate_uuid(True, seed)[:16]
+        return 'android-{0!s}'.format(cls.generate_uuid(True, seed)[:16])
 
     def generate_adid(self, seed=None):
         """
@@ -402,7 +412,14 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             modified_seed = sha2.hexdigest()
         return self.generate_uuid(False, modified_seed)
 
-    def _read_response(self, response):
+    @staticmethod
+    def _read_response(response):
+        """
+        Extract the response body from a http response.
+
+        :param response:
+        :return:
+        """
         if response.info().get('Content-Encoding') == 'gzip':
             buf = BytesIO(response.read())
             res = gzip.GzipFile(fileobj=buf).read().decode('utf8')
@@ -410,8 +427,19 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             res = response.read().decode('utf8')
         return res
 
-    def _call_api(self, endpoint, params=None, query=None, return_response=False, unsigned=False):
-        url = self.api_url + endpoint
+    def _call_api(self, endpoint, params=None, query=None, return_response=False, unsigned=False, version='v1'):
+        """
+        Calls the private api.
+
+        :param endpoint: endpoint path that should end with '/', example 'discover/explore/'
+        :param params: POST parameters
+        :param query: GET url query parameters
+        :param return_response: return the response instead of the parsed json object
+        :param unsigned: use post params as-is without signing
+        :param version: for the versioned api base url. Default 'v1'.
+        :return:
+        """
+        url = '{0}{1}'.format(self.api_url.format(version=version), endpoint)
         if query:
             url += ('?' if '?' not in endpoint else '&') + compat_urllib_parse.urlencode(query)
 
@@ -436,13 +464,13 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
 
         req = compat_urllib_request.Request(url, data, headers=headers)
         try:
-            self.logger.debug('REQUEST: %s %s' % (url, req.get_method()))
-            self.logger.debug('DATA: %s' % data)
+            self.logger.debug('REQUEST: {0!s} {1!s}'.format(url, req.get_method()))
+            self.logger.debug('DATA: {0!s}'.format(data))
             response = self.opener.open(req, timeout=self.timeout)
         except compat_urllib_error.HTTPError as e:
             error_msg = e.reason
-            error_response = e.read().decode('utf8')
-            self.logger.debug('RESPONSE: %d %s' % (e.code, error_response))
+            error_response = self._read_response(e)
+            self.logger.debug('RESPONSE: {0:d} {1!s}'.format(e.code, error_response))
             try:
                 error_obj = json.loads(error_response)
                 if error_obj.get('message') == 'login_required':
@@ -454,30 +482,37 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
                         error_obj.get('message'), code=e.code,
                         error_response=json.dumps(error_obj))
                 elif error_obj.get('message'):
-                    error_msg = '%s: %s' % (e.reason, error_obj['message'])
-            except (ClientLoginError, ClientLoginRequiredError):
+                    error_msg = '{0!s}: {1!s}'.format(e.reason, error_obj['message'])
+            except (ClientLoginError, ClientLoginRequiredError, ClientThrottledError):
                 raise
-            except:
-                # do nothing, prob can't parse json
-                pass
+            except ValueError as ex:
+                # do nothing else, prob can't parse json
+                self.logger.warn('Error parsing error response: {}'.format(str(ex)))
             raise ClientError(error_msg, e.code, error_response)
+        except (SSLError, timeout, SocketError,
+                compat_urllib_error.URLError,   # URLError is base of HTTPError
+                compat_http_client.HTTPException) as connection_error:
+            # ConnectionError is py3-specific. Hm.
+            # https://docs.python.org/3/library/exceptions.html#ConnectionError
+            raise ClientConnectionError('{} {}'.format(
+                connection_error.__class__.__name__, str(connection_error)))
 
         if return_response:
             return response
 
         response_content = self._read_response(response)
-        self.logger.debug('RESPONSE: %d %s' % (response.code, response_content))
+        self.logger.debug('RESPONSE: {0:d} {1!s}'.format(response.code, response_content))
         json_response = json.loads(response_content)
 
         if json_response.get('message', '') == 'login_required':
             raise ClientLoginRequiredError(
-                json_response.get('message'),
+                json_response.get('message'), code=response.code,
                 error_response=json.dumps(json_response))
 
         # not from oembed or an ok response
         if not json_response.get('provider_url') and json_response.get('status', '') != 'ok':
             raise ClientError(
-                json_response.get('message', 'Unknown error'),
+                json_response.get('message', 'Unknown error'), code=response.code,
                 error_response=json.dumps(json_response))
 
         return json_response

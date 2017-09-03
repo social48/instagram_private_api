@@ -2,11 +2,9 @@
 
 A Python wrapper for the Instagram private API with no 3rd party dependencies. Supports both the app and web APIs.
 
-![Python 2.7](https://img.shields.io/badge/Python-2.7-green.svg)
-![Python 3.5](https://img.shields.io/badge/Python-3.5-green.svg)
-![License: MIT](https://img.shields.io/badge/license-MIT_License-blue.svg)
-[![Release](https://img.shields.io/badge/release-v1.2.5-orange.svg)](https://github.com/ping/instagram_private_api/releases)
-[![Docs](https://img.shields.io/badge/docs-readthedocs.io-ff4980.svg)](https://instagram-private-api.readthedocs.io/en/latest/)
+![Python 2.7, 3.5](https://img.shields.io/badge/Python-2.7%2C%203.5-3776ab.svg?maxAge=2592000)
+[![Release](https://img.shields.io/github/release/ping/instagram_private_api.svg?colorB=ff7043)](https://github.com/ping/instagram_private_api/releases)
+[![Docs](https://img.shields.io/badge/docs-readthedocs.io-ff4980.svg?maxAge=2592000)](https://instagram-private-api.readthedocs.io/en/latest/)
 [![Build](https://img.shields.io/travis/ping/instagram_private_api.svg)](https://travis-ci.org/ping/instagram_private_api)
 
 ## Overview
@@ -44,11 +42,11 @@ Documentation is available at https://instagram-private-api.readthedocs.io/en/la
 
 Install with pip:
 
-``pip install git+ssh://git@github.com/ping/instagram_private_api.git@1.2.5``
+``pip install git+ssh://git@github.com/ping/instagram_private_api.git@1.3.6``
 
 To update:
 
-``pip install git+ssh://git@github.com/ping/instagram_private_api.git@1.2.5 --upgrade``
+``pip install git+ssh://git@github.com/ping/instagram_private_api.git@1.3.6 --upgrade``
 
 To update with latest repo code:
 
@@ -74,12 +72,13 @@ password = 'YOUR_PASSWORD'
 
 api = Client(user_name, password)
 results = api.feed_timeline()
-items = results.get('items', [])
+items = [item for item in results.get('feed_items', [])
+         if item.get('media_or_ad')]
 for item in items:
     # Manually patch the entity to match the public api as closely as possible, optional
     # To automatically patch entities, initialise the Client with auto_patch=True
-    ClientCompatPatch.media(item)
-    print(media['code'])
+    ClientCompatPatch.media(item['media_or_ad'])
+    print(item['media_or_ad']['code'])
 ```
 
 

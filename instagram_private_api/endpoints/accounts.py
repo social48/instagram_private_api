@@ -7,10 +7,12 @@ from ..compatpatch import ClientCompatPatch
 
 
 class AccountsEndpointsMixin(object):
+    """For endpoints in ``/accounts/``."""
 
     def login(self):
         """Login."""
-        challenge_response = self._call_api(
+
+        prelogin_params = self._call_api(
             'si/fetch_headers/',
             params='',
             query={'challenge_type': 'signup', 'guid': self.generate_uuid(True)},
@@ -18,8 +20,8 @@ class AccountsEndpointsMixin(object):
 
         if not self.csrftoken:
             raise ClientError(
-                'Unable to get csrf from login challenge.',
-                error_response=self._read_response(challenge_response))
+                'Unable to get csrf from prelogin.',
+                error_response=self._read_response(prelogin_params))
 
         login_params = {
             'device_id': self.device_id,
@@ -36,9 +38,9 @@ class AccountsEndpointsMixin(object):
             login_response = self._call_api(
                 'accounts/login/', params=login_params, return_response=True)
         except compat_urllib_error.HTTPError as e:
-            error_response = e.read()
+            error_response = self._read_response(e)
             if e.code == 400:
-                raise ClientLoginError('Unable to login: %s' % e)
+                raise ClientLoginError('Unable to login: {0!s}'.format(e))
             raise ClientError(e.reason, e.code, error_response)
 
         if not self.csrftoken:
@@ -86,7 +88,7 @@ class AccountsEndpointsMixin(object):
         :return:
         """
         if int(gender) not in [1, 2, 3]:
-            raise ValueError('Invalid gender: %d' % int(gender))
+            raise ValueError('Invalid gender: {0:d}'.format(int(gender)))
         if not email:
             raise ValueError('Email is required.')
 
@@ -131,28 +133,33 @@ class AccountsEndpointsMixin(object):
             ('profile_pic', 'profile_pic', 'application/octet-stream', photo_data)
         ]
 
-        content_type, body = MultipartFormDataEncoder(self.uuid).encode(fields, files)
+        content_type, body = MultipartFormDataEncoder().encode(fields, files)
 
         headers = self.default_headers
         headers['Content-Type'] = content_type
         headers['Content-Length'] = len(body)
 
-        req = compat_urllib_request.Request(self.api_url + endpoint, body, headers=headers)
+        endpoint_url = '{0}{1}'.format(self.api_url.format(version='v1'), endpoint)
+        req = compat_urllib_request.Request(endpoint_url, body, headers=headers)
         try:
+            self.logger.debug('POST {0!s}'.format(endpoint_url))
             response = self.opener.open(req, timeout=self.timeout)
         except compat_urllib_error.HTTPError as e:
             error_msg = e.reason
-            error_response = e.read()
+            error_response = self._read_response(e)
+            self.logger.debug('RESPONSE: {0:d} {1!s}'.format(e.code, error_response))
             try:
                 error_obj = json.loads(error_response)
                 if error_obj.get('message'):
-                    error_msg = '%s: %s' % (e.reason, error_obj['message'])
-            except:
-                # do nothing, prob can't parse json
-                pass
+                    error_msg = '{0!s}: {1!s}'.format(e.reason, error_obj['message'])
+            except ValueError as e:
+                # do nothing else, prob can't parse json
+                self.logger.warn('Error parsing error response: {}'.format(str(e)))
             raise ClientError(error_msg, e.code, error_response)
 
-        json_response = json.loads(self._read_response(response))
+        post_response = self._read_response(response)
+        self.logger.debug('RESPONSE: {0:d} {1!s}'.format(response.code, post_response))
+        json_response = json.loads(post_response)
 
         if self.auto_patch:
             ClientCompatPatch.user(json_response['user'], drop_incompat_keys=self.drop_incompat_keys)

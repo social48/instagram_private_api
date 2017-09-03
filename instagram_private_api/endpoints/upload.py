@@ -1,16 +1,39 @@
 import json
 import time
 from random import randint
+import re
 import warnings
 
 from ..compat import compat_urllib_error, compat_urllib_request
 from ..errors import ClientError
 from ..http import MultipartFormDataEncoder
-from ..utils import max_chunk_count_generator
+from ..utils import (
+    max_chunk_count_generator, max_chunk_size_generator,
+    get_file_size
+)
 from ..compatpatch import ClientCompatPatch
+from .common import ClientDeprecationWarning
+from .common import MediaTypes
+
+
+class MediaRatios(object):
+    """
+    Class holding valid aspect ratios (width: height) for media uploads.
+    """
+
+    # Based on IG sampling
+    # and from https://help.instagram.com/1469029763400082
+    #: Acceptable min, max values of with/height ratios for a standard media upload
+    standard = 4.0 / 5.0, 90.0 / 47.0
+    __device_ratios = [(3, 4), (2, 3), (5, 8), (3, 5), (9, 16), (10, 16), (40, 71)]
+    __aspect_ratios = [1.0 * x[0] / x[1] for x in __device_ratios]
+
+    #: Acceptable min, max values of with/height ratios for a story upload
+    reel = min(__aspect_ratios), max(__aspect_ratios)
 
 
 class UploadEndpointsMixin(object):
+    """For endpoints relating to upload functionality."""
 
     EXTERNAL_LOC_SOURCES = {
         'foursquare': 'foursquare_v2_id',
@@ -19,9 +42,15 @@ class UploadEndpointsMixin(object):
     }
 
     def _validate_location(self, location):
+        """
+        Validates and patches a location dict for use with the upload functions
+
+        :param location: dict containing location info
+        :return:
+        """
         location_keys = ['external_source', 'name', 'address']
-        if type(location) != dict:
-            raise ValueError('Location must be a dict')
+        if not isinstance(location, dict):
+            raise ValueError('Location must be a dict.')
 
         # patch location object returned from location_search
         if 'external_source' not in location and 'external_id_source' in location and 'external_id' in location:
@@ -31,10 +60,10 @@ class UploadEndpointsMixin(object):
                 location[self.EXTERNAL_LOC_SOURCES[external_source]] = location['external_id']
         for k in location_keys:
             if not location.get(k):
-                raise ValueError('Location dict must contain "%s"' % k)
+                raise ValueError('Location dict must contain "{0!s}".'.format(k))
         for k, val in self.EXTERNAL_LOC_SOURCES.items():
             if location['external_source'] == k and not location.get(val):
-                raise ValueError('Location dict must contain "%s"' % val)
+                raise ValueError('Location dict must contain "{0!s}".'.format(val))
 
         media_loc = {
             'name': location['name'],
@@ -50,29 +79,35 @@ class UploadEndpointsMixin(object):
                 media_loc[val] = location[val]
         return media_loc
 
-    @classmethod
-    def standard_ratios(cls):
+    @staticmethod
+    def standard_ratios():  # pragma: no cover
         """
+        Deprecated. Use MediaRatios.standard instead.
         Acceptable min, max values of with/height ratios for a standard media upload
 
         :return: tuple of (min. ratio, max. ratio)
         """
-        # Based on IG sampling
-        # and from https://help.instagram.com/1469029763400082
-        return 4.0 / 5.0, 90.0 / 47.0
+        warnings.warn(
+            'Client.standard_ratios() is deprecated. '
+            'Please use MediaRatios.standard instead.',
+            ClientDeprecationWarning
+        )
+        return MediaRatios.standard
 
-    @classmethod
-    def reel_ratios(cls):
+    @staticmethod
+    def reel_ratios():  # pragma: no cover
         """
+        Deprecated. Use MediaRatios.reel instead.
         Acceptable min, max values of with/height ratios for a story upload
 
         :return: tuple of (min. ratio, max. ratio)
         """
-        # min_ratio = 9.0/16.0
-        # max_ratio = 3.0/4.0 if is_video else 9.0/16.0
-        device_ratios = [(3, 4), (2, 3), (5, 8), (3, 5), (9, 16), (10, 16), (40, 71)]
-        aspect_ratios = list(map(lambda x: 1.0 * x[0] / x[1], device_ratios))
-        return min(aspect_ratios), max(aspect_ratios)
+        warnings.warn(
+            'Client.reel_ratios() is deprecated. '
+            'Please use MediaRatios.reel instead.',
+            ClientDeprecationWarning
+        )
+        return MediaRatios.reel
 
     @classmethod
     def compatible_aspect_ratio(cls, size):
@@ -82,21 +117,20 @@ class UploadEndpointsMixin(object):
         :param size: tuple of (width, height)
         :return: True/False
         """
-        min_ratio, max_ratio = cls.standard_ratios()
+        min_ratio, max_ratio = MediaRatios.standard
         width, height = size
         this_ratio = 1.0 * width / height
         return min_ratio <= this_ratio <= max_ratio
 
     @classmethod
-    def reel_compatible_aspect_ratio(cls, size, is_video=False):
+    def reel_compatible_aspect_ratio(cls, size):
         """
         Helper method to check aspect ratio for story uploads
 
         :param size: tuple of (width, height)
         :return: True/False
         """
-        warnings.warn('The is_video parameter will be removed in a future version.', FutureWarning)
-        min_ratio, max_ratio = cls.reel_ratios()
+        min_ratio, max_ratio = MediaRatios.reel
         width, height = size
         this_ratio = 1.0 * width / height
         return min_ratio <= this_ratio <= max_ratio
@@ -383,37 +417,38 @@ class UploadEndpointsMixin(object):
         if is_sidecar:
             fields.append(('is_sidecar', '1'))
             if for_video:
-                fields.append(('media_type', '2'))
+                fields.append(('media_type', MediaTypes.VIDEO))
 
         files = [
-            ('photo', 'pending_media_%s%s' % (str(int(time.time() * 1000)), '.jpg'),
+            ('photo', 'pending_media_{0!s}{1!s}'.format(str(int(time.time() * 1000)), '.jpg'),
              'application/octet-stream', photo_data)
         ]
 
-        content_type, body = MultipartFormDataEncoder(self.uuid).encode(fields, files)
+        content_type, body = MultipartFormDataEncoder().encode(fields, files)
         headers = self.default_headers
         headers['Content-Type'] = content_type
         headers['Content-Length'] = len(body)
 
-        req = compat_urllib_request.Request(self.api_url + endpoint, body, headers=headers)
+        endpoint_url = '{0}{1}'.format(self.api_url.format(version='v1'), endpoint)
+        req = compat_urllib_request.Request(endpoint_url, body, headers=headers)
         try:
-            self.logger.debug('POST %s' % self.api_url + endpoint)
+            self.logger.debug('POST {0!s}'.format(endpoint_url))
             response = self.opener.open(req, timeout=self.timeout)
         except compat_urllib_error.HTTPError as e:
             error_msg = e.reason
-            error_response = e.read()
-            self.logger.debug('RESPONSE: %d %s' % (e.code, error_response))
+            error_response = self._read_response(e)
+            self.logger.debug('RESPONSE: {0:d} {1!s}'.format(e.code, error_response))
             try:
                 error_obj = json.loads(error_response)
                 if error_obj.get('message'):
-                    error_msg = '%s: %s' % (e.reason, error_obj['message'])
-            except:
-                # do nothing, prob can't parse json
-                pass
+                    error_msg = '{0!s}: {1!s}'.format(e.reason, error_obj['message'])
+            except ValueError as e:
+                # do nothing else, prob can't parse json
+                self.logger.warn('Error parsing error response: {}'.format(str(e)))
             raise ClientError(error_msg, e.code, error_response)
 
         post_response = self._read_response(response)
-        self.logger.debug('RESPONSE: %d %s' % (response.code, post_response))
+        self.logger.debug('RESPONSE: {0:d} {1!s}'.format(response.code, post_response))
         json_response = json.loads(post_response)
 
         if for_video and is_sidecar:
@@ -439,7 +474,7 @@ class UploadEndpointsMixin(object):
 
         [CAUTION] FLAKY, IG is very picky about sizes, etc, needs testing.
 
-        :param video_data: byte string of the video content
+        :param video_data: byte string or a file-like object of the video content
         :param size: tuple of (width, height)
         :param duration: in seconds
         :param thumbnail_data: byte string of the video thumbnail content
@@ -449,6 +484,7 @@ class UploadEndpointsMixin(object):
              - **location**: a dict of venue/location information, from :meth:`location_search`
                or :meth:`location_fb_search`
              - **disable_comments**: bool to disable comments
+             - **max_retry_count**: maximum attempts to reupload. Default 10.
         :return:
         """
         warnings.warn('This endpoint has not been fully tested.', UserWarning)
@@ -464,16 +500,21 @@ class UploadEndpointsMixin(object):
             raise ValueError('Invalid video width.')
 
         if duration < 3.0:
-            raise ValueError('Duration is less than 3s')
+            raise ValueError('Duration is less than 3s.')
 
         if not to_reel and duration > 60.0:
-            raise ValueError('Duration is more than 60s')
+            raise ValueError('Duration is more than 60s.')
 
         if to_reel and duration > 15.0:
-            raise ValueError('Duration is more than 15s')
+            raise ValueError('Duration is more than 15s.')
 
-        if len(video_data) > 50 * 1024 * 1000:
-            raise ValueError('Video file is too big')
+        max_file_len = 50 * 1024 * 1000
+        try:
+            video_file_len = len(video_data)
+        except TypeError:
+            video_file_len = get_file_size(video_data)
+        if video_file_len > max_file_len:
+            raise ValueError('Video file is too big.')
 
         location = kwargs.pop('location', None)
         if location:
@@ -494,7 +535,7 @@ class UploadEndpointsMixin(object):
             params['is_sidecar'] = '1'
         else:
             params.update({
-                'media_type': '2',
+                'media_type': MediaTypes.VIDEO,
                 'upload_media_duration_ms': int(duration * 1000),
                 'upload_media_width': width,
                 'upload_media_height': height
@@ -504,67 +545,111 @@ class UploadEndpointsMixin(object):
         upload_url = res['video_upload_urls'][-1]['url']
         upload_job = res['video_upload_urls'][-1]['job']
 
-        chunk_count = 4
-        total_len = len(video_data)
+        successful_chunk_ranges = []
+        all_done = False
 
-        # Alternatively, can use max_chunk_size_generator(20480, video_data)
-        # [TODO] We can be a little smart about using either generators
-        # depending on the file size, or other factors
-        # for chunk, data in max_chunk_size_generator(200000, video_data):
-        for chunk, data in max_chunk_count_generator(chunk_count, video_data):
-            headers = self.default_headers
-            headers['Connection'] = 'keep-alive'
-            headers['Content-Type'] = 'application/octet-stream'
-            headers['Content-Disposition'] = 'attachment; filename="video.mov"'
-            headers['Session-ID'] = upload_id
-            if is_sidecar:
-                headers['Cookie'] = 'sessionid=' + self.get_cookie_value('sessionid')
-            headers['job'] = upload_job
-            headers['Content-Length'] = chunk.length
-            headers['Content-Range'] = 'bytes %d-%d/%d' % (chunk.start, chunk.end - 1, total_len)
-            self.logger.debug('POST %s' % upload_url)
-            self.logger.debug('Uploading Content-Range: %s' % headers['Content-Range'])
+        max_retry_count = kwargs.pop('max_retry_count', 10)
+        configure_delay = 0
+        for _ in range(max_retry_count + 1):
+            # Prevent excessively small chunks
+            if video_file_len > 1 * 1024 * 1000:
+                # max num of chunks = 4
+                chunk_generator = max_chunk_count_generator(4, video_data)
+            else:
+                # max chunk size = 350,000 so that we'll always have
+                # <4 chunks when it's <1mb
+                chunk_generator = max_chunk_size_generator(350000, video_data)
 
-            req = compat_urllib_request.Request(
-                str(upload_url), data=data, headers=headers)
+            for chunk, data in chunk_generator:
+                skip_chunk = False
+                for received_chunk in successful_chunk_ranges:
+                    if received_chunk[0] <= chunk.start and received_chunk[1] >= (chunk.end - 1):
+                        skip_chunk = True
+                        break
+                if skip_chunk:
+                    self.logger.debug('Skipped chunk: {0:d} - {1:d}'.format(chunk.start, chunk.end - 1))
+                    continue
 
-            try:
-                res = self.opener.open(req, timeout=self.timeout)
-                post_response = self._read_response(res)
-                self.logger.debug('RESPONSE: %d %s' % (res.code, post_response))
-                if chunk.is_last and res.info().get('Content-Type') == 'application/json':
-                    # last chunk
-                    upload_res = json.loads(post_response)
-                    configure_delay = int(upload_res.get('configure_delay_ms', 0)) / 1000.0
-                    self.logger.debug('Configure delay: %s' % configure_delay)
-                    time.sleep(configure_delay)
-                elif not chunk.is_last and not post_response.startswith('0-'):
-                    # A correct response will look like 0-199999/4062266 where
-                    # 199999 is the cumulated count of uploaded bytes
-                    # If a non-zero range start value is received, the upload will
-                    # eventually 'Transcode timeout' at configure
-                    self.logger.error('Received chunk upload response: %s' % post_response)
-                    raise ClientError('Upload has unexpectedly failed', code=500)
+                headers = self.default_headers
+                headers['Connection'] = 'keep-alive'
+                headers['Content-Type'] = 'application/octet-stream'
+                headers['Content-Disposition'] = 'attachment; filename="video.mov"'
+                headers['Session-ID'] = upload_id
+                if is_sidecar:
+                    headers['Cookie'] = 'sessionid=' + self.get_cookie_value('sessionid')
+                headers['job'] = upload_job
+                headers['Content-Length'] = chunk.length
+                headers['Content-Range'] = 'bytes {0:d}-{1:d}/{2:d}'.format(chunk.start, chunk.end - 1, video_file_len)
+                self.logger.debug('POST {0!s}'.format(upload_url))
+                self.logger.debug('Uploading Content-Range: {0!s}'.format(headers['Content-Range']))
 
-            except compat_urllib_error.HTTPError as e:
-                error_msg = e.reason
-                error_response = e.read()
-                self.logger.debug('RESPONSE: %d %s' % (e.code, error_response))
+                req = compat_urllib_request.Request(
+                    str(upload_url), data=data, headers=headers)
+
                 try:
-                    error_obj = json.loads(error_response)
-                    if error_obj.get('message'):
-                        error_msg = '%s: %s' % (e.reason, error_obj['message'])
-                except:
-                    # do nothing, prob can't parse json
-                    pass
-                raise ClientError(error_msg, e.code, error_response)
+                    res = self.opener.open(req, timeout=self.timeout)
+                    post_response = self._read_response(res)
+                    self.logger.debug('RESPONSE: {0:d} {1!s}'.format(res.code, post_response))
+                    if res.info().get('Content-Type') == 'application/json':
+                        # last chunk
+                        upload_res = json.loads(post_response)
+                        configure_delay = int(upload_res.get('configure_delay_ms', 0)) / 1000.0
+                        all_done = True
+                        break
+                    else:
+                        successful_chunk_ranges = []
+                        post_progress = post_response.split(',')
+                        for progress in post_progress:
+                            mobj = re.match(r'(?P<start>[0-9]+)\-(?P<end>[0-9]+)/(?P<total>[0-9]+)', progress)
+                            if mobj:
+                                successful_chunk_ranges.append((int(mobj.group('start')), int(mobj.group('end'))))
+                            else:
+                                self.logger.error(
+                                    'Received unexpected chunk upload response: {0!s}'.format(post_response))
+                                raise ClientError(
+                                    'Upload has failed due to unexpected upload response: {0!s}'.format(post_response),
+                                    code=500)
 
-        if not to_reel:
-            return self.configure_video(
-                upload_id, size, duration, thumbnail_data, caption=caption, location=location,
-                disable_comments=disable_comments, is_sidecar=is_sidecar)
-        else:
-            return self.configure_video_to_reel(upload_id, size, duration, thumbnail_data)
+                except compat_urllib_error.HTTPError as e:
+                    error_msg = e.reason
+                    error_response = self._read_response(e)
+                    self.logger.debug('RESPONSE: {0:d} {1!s}'.format(e.code, error_response))
+                    try:
+                        error_obj = json.loads(error_response)
+                        if error_obj.get('message'):
+                            error_msg = '{0!s}: {1!s}'.format(e.reason, error_obj['message'])
+                    except Exception as ex:
+                        # do nothing else, prob can't parse json
+                        self.logger.warn('Error parsing error response: {}'.format(str(ex)))
+                    raise ClientError(error_msg, e.code, error_response)
+            else:
+                # if not break due to completed chunks then continue with next chunk
+                continue
+            break
+
+        if not all_done:
+            raise ClientError('Upload has failed due to incomplete chunk uploads.', code=500)
+
+        if not configure_delay:
+            configure_delay = 3
+        configure_retry_max = 2
+
+        for i in range(1, configure_retry_max + 1):
+            try:
+                if not to_reel:
+                    result = self.configure_video(
+                        upload_id, size, duration, thumbnail_data, caption=caption, location=location,
+                        disable_comments=disable_comments, is_sidecar=is_sidecar)
+                else:
+                    result = self.configure_video_to_reel(
+                        upload_id, size, duration, thumbnail_data)
+                return result
+            except ClientError as ce:
+                if (ce.code == 202 or ce.msg == 'Transcode timeout') and i < configure_retry_max:
+                    self.logger.warn('Retry configure after {0:f} seconds'.format(configure_delay))
+                    time.sleep(configure_delay)
+                else:
+                    raise
 
     def post_photo_story(self, photo_data, size):
         """
@@ -581,7 +666,7 @@ class UploadEndpointsMixin(object):
         """
         Upload a video story
 
-        :param video_data: byte string of the video content
+        :param video_data: byte string or a file-like object of the video content
         :param size: tuple of (width, height)
         :param duration: in seconds
         :param thumbnail_data: byte string of the video thumbnail content
@@ -619,7 +704,7 @@ class UploadEndpointsMixin(object):
             if len(children_metadata) >= 10:
                 continue
             if media.get('type', '') not in ['image', 'video']:
-                raise ValueError('Invalid media type: %s' % media.get('type', ''))
+                raise ValueError('Invalid media type: {0!s}'.format(media.get('type', '')))
             if not media.get('data'):
                 raise ValueError('Data not specified.')
             if not media.get('size'):
@@ -631,7 +716,7 @@ class UploadEndpointsMixin(object):
                     raise ValueError('Thumbnail not specified.')
             aspect_ratio = (media['size'][0] * 1.0) / (media['size'][1] * 1.0)
             if aspect_ratio > 1.0 or aspect_ratio < 1.0:
-                raise ValueError('Invalid media aspect ratio')
+                raise ValueError('Invalid media aspect ratio.')
 
             if media['type'] == 'video':
                 metadata = self.post_video(
@@ -654,7 +739,7 @@ class UploadEndpointsMixin(object):
             children_metadata.append(metadata)
 
         if len(children_metadata) <= 1:
-            raise ValueError('Invalid number of media objects: %d' % len(children_metadata))
+            raise ValueError('Invalid number of media objects: {0:d}'.format(len(children_metadata)))
 
         # configure as sidecar
         endpoint = 'media/configure_sidecar/'

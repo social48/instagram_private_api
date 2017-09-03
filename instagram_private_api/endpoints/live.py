@@ -3,6 +3,7 @@ from ..compatpatch import ClientCompatPatch
 
 
 class LiveEndpointsMixin(object):
+    """For endpoints in ``/live/``."""
 
     def user_broadcast(self, user_id):
         """
@@ -22,10 +23,10 @@ class LiveEndpointsMixin(object):
         :param like_count:
         :return:
         """
-        if like_count < 1 or like_count > 5:
+        if not 1 <= like_count <= 5:
             raise ValueError('Invalid like_count')
         broadcast_id = str(broadcast_id)
-        endpoint = 'live/%(broadcast_id)s/like/' % {'broadcast_id': broadcast_id}
+        endpoint = 'live/{broadcast_id!s}/like/'.format(**{'broadcast_id': broadcast_id})
         params = {'user_like_count': str(like_count)}
         params.update(self.authenticated_params)
         return self._call_api(endpoint, params=params)
@@ -38,7 +39,7 @@ class LiveEndpointsMixin(object):
         :return:
         """
         broadcast_id = str(broadcast_id)
-        endpoint = 'live/%(broadcast_id)s/get_like_count/' % {'broadcast_id': broadcast_id}
+        endpoint = 'live/{broadcast_id!s}/get_like_count/'.format(**{'broadcast_id': broadcast_id})
         return self._call_api(endpoint, query={'like_ts': like_ts})
 
     def broadcast_comments(self, broadcast_id, last_comment_ts=0):
@@ -50,7 +51,7 @@ class LiveEndpointsMixin(object):
         :return:
         """
         broadcast_id = str(broadcast_id)
-        endpoint = 'live/%(broadcast_id)s/get_comment/' % {'broadcast_id': broadcast_id}
+        endpoint = 'live/{broadcast_id!s}/get_comment/'.format(**{'broadcast_id': broadcast_id})
         res = self._call_api(endpoint, query={'last_comment_ts': last_comment_ts})
         if self.auto_patch and res.get('comments'):
             [ClientCompatPatch.comment(c) for c in res.get('comments', [])]
@@ -66,7 +67,7 @@ class LiveEndpointsMixin(object):
         :return:
         """
         broadcast_id = str(broadcast_id)
-        endpoint = 'live/%(broadcast_id)s/heartbeat_and_get_viewer_count/' % {'broadcast_id': broadcast_id}
+        endpoint = 'live/{broadcast_id!s}/heartbeat_and_get_viewer_count/'.format(**{'broadcast_id': broadcast_id})
         params = {
             '_csrftoken': self.csrftoken,
             '_uuid': self.uuid
@@ -82,7 +83,7 @@ class LiveEndpointsMixin(object):
         :return:
         """
         broadcast_id = str(broadcast_id)
-        endpoint = 'live/%(broadcast_id)s/comment/' % {'broadcast_id': broadcast_id}
+        endpoint = 'live/{broadcast_id!s}/comment/'.format(**{'broadcast_id': broadcast_id})
         params = {
             'live_or_vod': '1',
             'offset_to_video_start': '0',
@@ -137,7 +138,7 @@ class LiveEndpointsMixin(object):
                 }
         """
         broadcast_id = str(broadcast_id)
-        endpoint = 'live/%(broadcast_id)s/info/' % {'broadcast_id': broadcast_id}
+        endpoint = 'live/{broadcast_id!s}/info/'.format(**{'broadcast_id': broadcast_id})
         return self._call_api(endpoint)
 
     def suggested_broadcasts(self, **kwargs):
@@ -148,3 +149,47 @@ class LiveEndpointsMixin(object):
         :return:
         """
         return self._call_api('live/get_suggested_broadcasts/', query=kwargs)
+
+    def replay_broadcast_comments(
+            self, broadcast_id, starting_offset=0,
+            encoding_tag='instagram_dash_remuxed'):
+        """
+        Get comments for a post live broadcast.
+
+        :param broadcast_id:
+        :param starting_offset:
+        :param encoding_tag:
+        :return:
+        """
+        broadcast_id = str(broadcast_id)
+        query = {
+            'starting_offset': starting_offset,
+            'encoding_tag': encoding_tag,
+        }
+        endpoint = 'live/{broadcast_id!s}/get_post_live_comments/'.format(
+            **{'broadcast_id': broadcast_id})
+        res = self._call_api(endpoint, query=query)
+        if self.auto_patch and res.get('comments'):
+            [ClientCompatPatch.comment(c['comment']) for c in res.get('comments', [])
+             if c.get('comment')]
+        return res
+
+    def replay_broadcast_likes(
+            self, broadcast_id, starting_offset=0,
+            encoding_tag='instagram_dash_remuxed'):
+        """
+        Get likes for a post live broadcast.
+
+        :param broadcast_id:
+        :param starting_offset:
+        :param encoding_tag:
+        :return:
+        """
+        broadcast_id = str(broadcast_id)
+        query = {
+            'starting_offset': starting_offset,
+            'encoding_tag': encoding_tag,
+        }
+        endpoint = 'live/{broadcast_id!s}/get_post_live_likes/'.format(
+            **{'broadcast_id': broadcast_id})
+        return self._call_api(endpoint, query=query)

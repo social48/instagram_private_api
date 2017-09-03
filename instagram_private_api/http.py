@@ -2,7 +2,31 @@ from io import BytesIO
 import sys
 import codecs
 import mimetypes
-import uuid
+import random
+import string
+from .compat import compat_cookiejar, compat_pickle
+
+
+class ClientCookieJar(compat_cookiejar.CookieJar):
+    """Custom CookieJar that can be pickled to/from strings
+    """
+    def __init__(self, cookie_string=None, policy=None):
+        compat_cookiejar.CookieJar.__init__(self, policy)
+        if cookie_string:
+            if isinstance(cookie_string, bytes):
+                self._cookies = compat_pickle.loads(cookie_string)
+            else:
+                self._cookies = compat_pickle.loads(cookie_string.encode('utf-8'))
+
+    @property
+    def expires_earliest(self):
+        if len(self) > 0:
+            # sometimes a cookie has no expiration?
+            return min([cookie.expires for cookie in self if cookie.expires])
+        return None
+
+    def dump(self):
+        return compat_pickle.dumps(self._cookies)
 
 
 class MultipartFormDataEncoder(object):
@@ -11,7 +35,8 @@ class MultipartFormDataEncoder(object):
     http://stackoverflow.com/questions/1270518/python-standard-library-to-post-multipart-form-data-encoded-data
     """
     def __init__(self, boundary=None):
-        self.boundary = boundary or uuid.uuid4().hex
+        self.boundary = boundary or \
+            ''.join(random.choice(string.ascii_letters + string.digits + '_-') for _ in range(30))
         self.content_type = 'multipart/form-data; boundary={}'.format(self.boundary)
 
     @classmethod
@@ -34,7 +59,7 @@ class MultipartFormDataEncoder(object):
             yield encoder('--{}\r\n'.format(self.boundary))
             yield encoder(self.u('Content-Disposition: form-data; name="{}"\r\n').format(key))
             yield encoder('\r\n')
-            if isinstance(value, int) or isinstance(value, float):
+            if isinstance(value, (int, float)):
                 value = str(value)
             yield encoder(self.u(value))
             yield encoder('\r\n')
@@ -53,6 +78,6 @@ class MultipartFormDataEncoder(object):
 
     def encode(self, fields, files):
         body = BytesIO()
-        for chunk, chunk_len in self.iter(fields, files):
+        for chunk, _ in self.iter(fields, files):
             body.write(chunk)
         return self.content_type, body.getvalue()

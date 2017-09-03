@@ -8,31 +8,40 @@ from io import BytesIO
 import time
 import warnings
 from functools import wraps
+import string
+import random
 
 from .compat import (
-    compat_pickle, compat_cookiejar, compat_urllib_request,
-    compat_urllib_parse, compat_urllib_parse_urlparse, compat_urllib_error
+    compat_urllib_request, compat_urllib_parse,
+    compat_urllib_parse_urlparse, compat_urllib_error
 )
 from .compatpatch import ClientCompatPatch
 from .errors import ClientError, ClientLoginError, ClientCookieExpiredError
+from .http import ClientCookieJar, MultipartFormDataEncoder
+from .common import ClientDeprecationWarning
 
 logger = logging.getLogger(__name__)
+warnings.simplefilter('always', ClientDeprecationWarning)
 
 
 def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if not args[0].is_authenticated:
-            raise ClientError('Method requires authentication', 403)
+            raise ClientError('Method requires authentication.', 403)
         return fn(*args, **kwargs)
     return wrapper
 
 
 class Client(object):
+    """Main API client class for the web api."""
 
     API_URL = 'https://www.instagram.com/query/'
+    GRAPHQL_API_URL = 'https://www.instagram.com/graphql/query/'
     USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/601.6.17 (KHTML, like Gecko) ' \
                  'Version/9.1.1 Safari/601.6.17'
+    MOBILE_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 9_1 like Mac OS X) ' \
+                        'AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 Mobile/13B143 Safari/601.1'
 
     def __init__(self, user_agent=None, **kwargs):
         """
@@ -62,11 +71,14 @@ class Client(object):
         self.on_login = kwargs.pop('on_login', None)
         user_settings = kwargs.pop('settings', None) or {}
         self.user_agent = user_agent or user_settings.get('user_agent') or self.USER_AGENT
+        self.mobile_user_agent = (kwargs.pop('mobile_user_agent', None)
+                                  or user_settings.get('mobile_user_agent')
+                                  or self.MOBILE_USER_AGENT)
 
         cookie_string = kwargs.pop('cookie', None) or user_settings.get('cookie')
         cookie_jar = ClientCookieJar(cookie_string=cookie_string)
         if cookie_string and cookie_jar.expires_earliest and int(time.time()) >= cookie_jar.expires_earliest:
-            raise ClientCookieExpiredError('Oldest cookie expired at %s' % cookie_jar.expires_earliest)
+            raise ClientCookieExpiredError('Oldest cookie expired at {0!s}'.format(cookie_jar.expires_earliest))
 
         custom_ssl_context = kwargs.pop('custom_ssl_context', None)
         proxy_handler = None
@@ -75,10 +87,10 @@ class Client(object):
             warnings.warn('Proxy support is alpha.', UserWarning)
             parsed_url = compat_urllib_parse_urlparse(proxy)
             if parsed_url.netloc and parsed_url.scheme:
-                proxy_address = '%s://%s' % (parsed_url.scheme, parsed_url.netloc)
+                proxy_address = '{0!s}://{1!s}'.format(parsed_url.scheme, parsed_url.netloc)
                 proxy_handler = compat_urllib_request.ProxyHandler({'https': proxy_address})
             else:
-                raise ValueError('Invalid proxy argument: %s' % proxy)
+                raise ValueError('Invalid proxy argument: {0!s}'.format(proxy))
         handlers = []
         if proxy_handler:
             handlers.append(proxy_handler)
@@ -107,26 +119,27 @@ class Client(object):
     def cookie_jar(self):
         return self.opener.cookie_jar
 
-    @property
-    def csrftoken(self):
+    def get_cookie_value(self, key):
         for cookie in self.cookie_jar:
-            if cookie.name.lower() == 'csrftoken':
+            if cookie.name.lower() == key.lower():
                 return cookie.value
         return None
+
+    @property
+    def csrftoken(self):
+        """The client's current csrf token"""
+        return self.get_cookie_value('csrftoken')
 
     @property
     def authenticated_user_id(self):
-        for cookie in self.cookie_jar:
-            if cookie.name.lower() == 'ds_user_id':
-                return cookie.value
-        return None
+        """The current authenticated user id"""
+        return self.get_cookie_value('ds_user_id')
 
     @property
     def authenticated_user_name(self):
-        for cookie in self.cookie_jar:
-            if cookie.name.lower() == 'ds_user':
-                return cookie.value
-        return None
+        """The current authenticated user name. No longer available."""
+        warnings.warn('No longer available.', DeprecationWarning)
+        return self.get_cookie_value('ds_user')
 
     @property
     def is_authenticated(self):
@@ -139,12 +152,38 @@ class Client(object):
         """Helper property that extracts the settings that you should cache
         in addition to username and password."""
         return {
-            'user_agent': self.user_agent,
             'cookie': self.opener.cookie_jar.dump(),
             'created_ts': int(time.time())
         }
 
-    def _make_request(self, url, params=None, headers=None, return_response=False, get_method=None):
+    @staticmethod
+    def _read_response(response):
+        """
+        Extract the response body from a http response.
+
+        :param response:
+        :return:
+        """
+        if response.info().get('Content-Encoding') == 'gzip':
+            buf = BytesIO(response.read())
+            res = gzip.GzipFile(fileobj=buf).read().decode('utf8')
+        else:
+            res = response.read().decode('utf8')
+        return res
+
+    def _make_request(self, url, params=None, headers=None, query=None,
+                      return_response=False, get_method=None):
+        """
+        Calls the web API.
+
+        :param url: fully formed api url
+        :param params: post params
+        :param headers: custom headers
+        :param query: get url params
+        :param return_response: bool flag to only return the http response object
+        :param get_method: custom http method type
+        :return:
+        """
         if not headers:
             headers = {
                 'User-Agent': self.user_agent,
@@ -163,6 +202,8 @@ class Client(object):
                     'Origin': 'https://www.instagram.com',
                     'Content-Type': 'application/x-www-form-urlencoded'
                 })
+        if query:
+            url += ('?' if '?' not in url else '&') + compat_urllib_parse.urlencode(query)
         req = compat_urllib_request.Request(url, headers=headers)
         if get_method:
             req.get_method = get_method
@@ -174,27 +215,24 @@ class Client(object):
             else:
                 data = compat_urllib_parse.urlencode(params).encode('ascii')
         try:
-            self.logger.debug('REQUEST: %s %s' % (url, req.get_method()))
-            self.logger.debug('DATA: %s' % data)
+            self.logger.debug('REQUEST: {0!s} {1!s}'.format(url, req.get_method()))
+            self.logger.debug('DATA: {0!s}'.format(data))
             res = self.opener.open(req, data=data, timeout=self.timeout)
             if return_response:
                 return res
 
-            if res.info().get('Content-Encoding') == 'gzip':
-                buf = BytesIO(res.read())
-                response_content = gzip.GzipFile(fileobj=buf).read().decode('utf8')
-            else:
-                response_content = res.read().decode('utf8')
+            response_content = self._read_response(res)
 
-            self.logger.debug('RESPONSE: %s' % response_content)
+            self.logger.debug('RESPONSE: {0!s}'.format(response_content))
             return json.loads(response_content)
 
         except compat_urllib_error.HTTPError as e:
-            raise ClientError('HTTPError "%s" while opening %s' % (e.reason, url), e.code)
+            raise ClientError('HTTPError "{0!s}" while opening {1!s}'.format(e.reason, url), e.code)
         except compat_urllib_error.URLError as e:
-            raise ClientError('URLError "%s" while opening %s' % (e.reason, url))
+            raise ClientError('URLError "{0!s}" while opening {1!s}'.format(e.reason, url))
 
-    def _sanitise_media_id(self, media_id):
+    @staticmethod
+    def _sanitise_media_id(media_id):
         """The web API uses the numeric media ID only, and not the formatted one where it's XXXXX_YYY"""
         if re.match(r'[0-9]+_[0-9]+', media_id):    # endpoint uses the entirely numeric ID, not XXXX_YYY
             media_id = media_id.split('_')[0]
@@ -208,6 +246,7 @@ class Client(object):
             raise ClientError('Unable to get csrf from init request.')
 
     def login(self):
+        """Login to the web site."""
         if not self.username or not self.password:
             raise ClientError('username/password is blank')
         params = {'username': self.username, 'password': self.password}
@@ -220,14 +259,17 @@ class Client(object):
             on_login_callback(self)
         return login_res
 
-    def user_info(self, user_id, **kwargs):
+    def user_info(self, user_id, **kwargs):     # pragma: no cover
         """
-        Get user info
+        OBSOLETE. Get user info.
 
         :param user_id: User id
         :param kwargs:
         :return:
         """
+        warnings.warn(
+            'This endpoint is obsolete. Do not use.', ClientDeprecationWarning)
+
         params = {
             'q': 'ig_user(%(user_id)s) {id, username, full_name, profile_pic_url, '
                  'biography, external_url, is_private, is_verified, '
@@ -242,6 +284,20 @@ class Client(object):
             user = ClientCompatPatch.user(user, drop_incompat_keys=self.drop_incompat_keys)
         return user
 
+    def user_info2(self, user_name, **kwargs):
+        """
+        Get user info.
+
+        :param username: User name (not numeric ID)
+        :param kwargs:
+        :return:
+        """
+        endpoint = 'https://www.instagram.com/{username!s}/'.format(**{'username': user_name})
+        info = self._make_request(endpoint, query={'__a': '1'})
+        if self.auto_patch:
+            ClientCompatPatch.user(info['user'], drop_incompat_keys=self.drop_incompat_keys)
+        return info['user']
+
     def user_feed(self, user_id, **kwargs):
         """
         Get user feed
@@ -249,50 +305,55 @@ class Client(object):
         :param user_id:
         :param kwargs:
             - **count**: Number of items to return. Default: 16
-            - **min_media_id** / **end_cursor**: For pagination
+            - **end_cursor**: For pagination. Taken from:
+
+                .. code-block:: python
+
+                    info.get('data', {}).get('user', {}).get(
+                        'edge_owner_to_timeline_media', {}).get(
+                        'page_info', {}).get('end_cursor')
             - **extract**: bool. Return a simple list of media
         :return:
         """
 
         count = kwargs.pop('count', 16)
-        min_media_id = kwargs.pop('min_media_id', None) or kwargs.pop('end_cursor', None)
-        if not min_media_id:
-            command = 'media.first(%(count)d)' % {'count': count}
-        else:
-            command = 'media.after(%(min_id)s, %(count)d)' % {'count': count, 'min_id': min_media_id}
-        params = {
-            'q': 'ig_user(%(user_id)s) {%(command)s {count, nodes {'
-                 'caption, code, comments {count}, date, dimensions {height, width}, comments_disabled, '
-                 'usertags {nodes {x, y, user {id, username, full_name, profile_pic_url} }}, '
-                 'location {id, name, lat, lng}, display_src, id, is_video, is_ad, '
-                 'likes {count}, owner {id, username, full_name, profile_pic_url, '
-                 'is_verified, is_private }, '
-                 '__typename, thumbnail_src, video_views, video_url}, page_info}}' % {
-                     'user_id': user_id, 'count': count, 'command': command},
-            'ref': 'tags::show'
-        }
-        info = self._make_request(self.API_URL, params=params)
-        if not info.get('media'):
+        end_cursor = kwargs.pop('end_cursor', None)
+
+        query = {
+            'query_id': '17880160963012870',
+            'id': user_id,
+            'first': count}
+
+        if end_cursor:
+            query['after'] = end_cursor
+        info = self._make_request(self.GRAPHQL_API_URL, query=query)
+
+        if not info.get('data', {}).get('user'):
             # non-existent accounts do not return media at all
             # private accounts return media with just a count, no nodes
             raise ClientError('Not Found', 404)
 
         if self.auto_patch:
-            [ClientCompatPatch.media(media, drop_incompat_keys=self.drop_incompat_keys)
-             for media in info.get('media', {}).get('nodes', [])]
+            [ClientCompatPatch.media(media['node'], drop_incompat_keys=self.drop_incompat_keys)
+             for media in info.get('data', {}).get('user', {}).get(
+                 'edge_owner_to_timeline_media', {}).get('edges', [])]
 
         if kwargs.pop('extract', True):
-            return info.get('media', {}).get('nodes', [])
+            return info.get('data', {}).get('user', {}).get(
+                'edge_owner_to_timeline_media', {}).get('edges', [])
         return info
 
-    def media_info(self, short_code, **kwargs):
+    def media_info(self, short_code, **kwargs):     # pragma: no cover
         """
-        Get media info. Does not properly extract carousel media.
+        OBSOLETE. Get media info. Does not properly extract carousel media.
 
         :param short_code: A media's shortcode
         :param kwargs:
         :return:
         """
+        warnings.warn(
+            'This endpoint is obsolete. Do not use.', ClientDeprecationWarning)
+
         params = {
             'q': 'ig_shortcode(%(media_code)s) { caption, code, comments {count}, date, '
                  'dimensions {height, width}, comments_disabled, '
@@ -328,9 +389,9 @@ class Client(object):
             'x-requested-with': 'XMLHttpRequest',
         }
         info = self._make_request(
-            'https://www.instagram.com/p/%s/?__a=1&__b=1' % short_code,
+            'https://www.instagram.com/p/{0!s}/?__a=1&__b=1'.format(short_code),
             headers=headers)
-        media = info.get('media', {})
+        media = info.get('graphql', {}).get('shortcode_media', {})
         if self.auto_patch:
             media = ClientCompatPatch.media(media, drop_incompat_keys=self.drop_incompat_keys)
         return media
@@ -342,33 +403,35 @@ class Client(object):
         :param short_code:
         :param kwargs:
             - **count**: Number of comments to return. Default: 16. Maximum: 1000
-            - **before_comment_id**: For pagination
+            - **end_cursor**: For pagination
             - **extract**: bool. Return a simple list of comments
         :return:
         """
         count = kwargs.pop('count', 16)
-        before_comment_id = kwargs.pop('before_comment_id', '0')
+        end_cursor = kwargs.pop('end_cursor', None)
 
-        params = {
-            'q': 'ig_shortcode(%(media_code)s) {comments.before(%(before_comment_id)s, %(count)d) {count, nodes {'
-                 'id, created_at, text, user {id, profile_pic_url, username, full_name, is_verified, is_private}}, '
-                 'page_info}}' %
-                 {'media_code': short_code, 'before_comment_id': before_comment_id, 'count': count},
-            'ref': 'media::show'
-        }
-        info = self._make_request(self.API_URL, params=params)
+        query = {
+            'query_id': '17852405266163336',
+            'shortcode': short_code,
+            'first': count}
 
-        if not info.get('comments'):
+        if end_cursor:
+            query['after'] = end_cursor
+        info = self._make_request(self.GRAPHQL_API_URL, query=query)
+
+        if not info.get('data', {}).get('shortcode_media'):
             # deleted media does not return 'comments' at all
             # media without comments will return comments, with counts = 0, nodes = [], etc
             raise ClientError('Not Found', 404)
 
         if self.auto_patch:
-            [ClientCompatPatch.comment(c, drop_incompat_keys=self.drop_incompat_keys)
-             for c in info.get('comments', {}).get('nodes', [])]
+            [ClientCompatPatch.comment(c['node'], drop_incompat_keys=self.drop_incompat_keys)
+             for c in info.get('data', {}).get('shortcode_media', {}).get(
+                 'edge_media_to_comment', {}).get('edges', [])]
 
         if kwargs.pop('extract', True):
-            return info.get('comments', {}).get('nodes', [])
+            return [c['node'] for c in info.get('data', {}).get('shortcode_media', {}).get(
+                'edge_media_to_comment', {}).get('edges', [])]
         return info
 
     @login_required
@@ -385,26 +448,23 @@ class Client(object):
         """
         count = kwargs.pop('count', 10)
         end_cursor = kwargs.pop('end_cursor', None)
-        if end_cursor:
-            command = 'follows.after(%(end_cursor)s, %(count)d)' % {
-                'end_cursor': end_cursor,
-                'count': count}
-        else:
-            command = 'follows.first(%(count)d)' % {'count': count}
-
-        params = {
-            'q': 'ig_user(%(user_id)s) {%(command)s {count, page_info {end_cursor, has_next_page}, '
-                 'nodes {id, is_verified, is_private, followed_by_viewer, requested_by_viewer, full_name, '
-                 'profile_pic_url, username}}}' % {'user_id': user_id, 'command': command},
-            'ref': 'relationships::follow_list',
+        query = {
+            'query_id': '17874545323001329',
+            'id': user_id,
+            'first': count,
         }
-        info = self._make_request(self.API_URL, params=params)
+        if end_cursor:
+            query['after'] = end_cursor
+
+        info = self._make_request(self.GRAPHQL_API_URL, query=query)
         if self.auto_patch:
-            [ClientCompatPatch.list_user(u, drop_incompat_keys=self.drop_incompat_keys)
-             for u in info.get('follows', {}).get('nodes', [])]
+            [ClientCompatPatch.list_user(u['node'], drop_incompat_keys=self.drop_incompat_keys)
+             for u in info.get('data', {}).get('user', {}).get(
+                 'edge_follow', {}).get('edges', [])]
 
         if kwargs.pop('extract', True):
-            return info.get('follows', {}).get('nodes', [])
+            return [u['node'] for u in info.get('data', {}).get('user', {}).get(
+                'edge_follow', {}).get('edges', [])]
         return info
 
     @login_required
@@ -421,26 +481,23 @@ class Client(object):
         """
         count = kwargs.pop('count', 10)
         end_cursor = kwargs.pop('end_cursor', None)
-        if end_cursor:
-            command = 'followed_by.after(%(end_cursor)s, %(count)d)' % {
-                'end_cursor': end_cursor,
-                'count': count}
-        else:
-            command = 'followed_by.first(%(count)d)' % {'count': count}
-
-        params = {
-            'q': 'ig_user(%(user_id)s) {%(command)s {count, page_info {end_cursor, has_next_page}, '
-                 'nodes {id, is_verified, is_private, followed_by_viewer, requested_by_viewer, full_name, '
-                 'profile_pic_url, username}}}' % {'user_id': user_id, 'command': command},
-            'ref': 'relationships::follow_list',
+        query = {
+            'query_id': '17851374694183129',
+            'id': user_id,
+            'first': count,
         }
-        info = self._make_request(self.API_URL, params=params)
+        if end_cursor:
+            query['after'] = end_cursor
+
+        info = self._make_request(self.GRAPHQL_API_URL, query=query)
         if self.auto_patch:
-            [ClientCompatPatch.list_user(u, drop_incompat_keys=self.drop_incompat_keys)
-             for u in info.get('followed_by', {}).get('nodes', [])]
+            [ClientCompatPatch.list_user(u['node'], drop_incompat_keys=self.drop_incompat_keys)
+             for u in info.get('data', {}).get('user', {}).get(
+                 'edge_followed_by', {}).get('edges', [])]
 
         if kwargs.pop('extract', True):
-            return info.get('followed_by', {}).get('nodes', [])
+            return [u['node'] for u in info.get('data', {}).get('user', {}).get(
+                'edge_followed_by', {}).get('edges', [])]
         return info
 
     @login_required
@@ -455,7 +512,7 @@ class Client(object):
                 {"status": "ok"}
         """
         media_id = self._sanitise_media_id(media_id)
-        endpoint = 'https://www.instagram.com/web/likes/%(media_id)s/like/' % {'media_id': media_id}
+        endpoint = 'https://www.instagram.com/web/likes/{media_id!s}/like/'.format(**{'media_id': media_id})
         res = self._make_request(endpoint, params='')
         return res
 
@@ -471,7 +528,7 @@ class Client(object):
                 {"status": "ok"}
         """
         media_id = self._sanitise_media_id(media_id)
-        endpoint = 'https://www.instagram.com/web/likes/%(media_id)s/unlike/' % {'media_id': media_id}
+        endpoint = 'https://www.instagram.com/web/likes/{media_id!s}/unlike/'.format(**{'media_id': media_id})
         return self._make_request(endpoint, params='')
 
     @login_required
@@ -485,7 +542,7 @@ class Client(object):
 
                 {"status": "ok", "result": "following"}
         """
-        endpoint = 'https://www.instagram.com/web/friendships/%(user_id)s/follow/' % {'user_id': user_id}
+        endpoint = 'https://www.instagram.com/web/friendships/{user_id!s}/follow/'.format(**{'user_id': user_id})
         return self._make_request(endpoint, params='')
 
     @login_required
@@ -499,7 +556,7 @@ class Client(object):
 
                 {"status": "ok"}
         """
-        endpoint = 'https://www.instagram.com/web/friendships/%(user_id)s/unfollow/' % {'user_id': user_id}
+        endpoint = 'https://www.instagram.com/web/friendships/{user_id!s}/unfollow/'.format(**{'user_id': user_id})
         return self._make_request(endpoint, params='')
 
     @login_required
@@ -535,7 +592,7 @@ class Client(object):
             raise ValueError('The comment cannot contain more than 1 URL.')
 
         media_id = self._sanitise_media_id(media_id)
-        endpoint = 'https://www.instagram.com/web/comments/%(media_id)s/add/' % {'media_id': media_id}
+        endpoint = 'https://www.instagram.com/web/comments/{media_id!s}/add/'.format(**{'media_id': media_id})
         params = {'comment_text': comment_text}
         return self._make_request(endpoint, params=params)
 
@@ -552,8 +609,8 @@ class Client(object):
                 {"status": "ok"}
         """
         media_id = self._sanitise_media_id(media_id)
-        endpoint = 'https://www.instagram.com/web/comments/%(media_id)s/delete/%(comment_id)s/' % {
-            'media_id': media_id, 'comment_id': comment_id}
+        endpoint = 'https://www.instagram.com/web/comments/{media_id!s}/delete/{comment_id!s}/'.format(**{
+            'media_id': media_id, 'comment_id': comment_id})
         return self._make_request(endpoint, params='')
 
     def search(self, query_text):
@@ -563,31 +620,103 @@ class Client(object):
         :param query_text: Search text
         :return:
         """
-        endpoint = 'https://www.instagram.com/web/search/topsearch/?' + compat_urllib_parse.urlencode(
-            {'query': query_text})
-        res = self._make_request(endpoint)
+        endpoint = 'https://www.instagram.com/web/search/topsearch/'
+        res = self._make_request(endpoint, query={'query': query_text})
         if self.auto_patch:
             for u in res.get('users', []):
                 ClientCompatPatch.list_user(u['user'])
         return res
 
+    @login_required
+    def post_photo(self, photo_data, caption=''):
+        """
+        Post a photo
 
-class ClientCookieJar(compat_cookiejar.CookieJar):
-    """Custom CookieJar that can be pickled to/from strings
-    """
-    def __init__(self, cookie_string=None, policy=None):
-        compat_cookiejar.CookieJar.__init__(self, policy)
-        if cookie_string:
-            if isinstance(cookie_string, bytes):
-                self._cookies = compat_pickle.loads(cookie_string)
-            else:
-                self._cookies = compat_pickle.loads(cookie_string.encode('utf-8'))
+        :param photo_data: byte string of the image
+        :param caption: caption text
+        """
+        warnings.warn('This endpoint has not been fully tested.', UserWarning)
 
-    @property
-    def expires_earliest(self):
-        if len(self) > 0:
-            return min([cookie.expires for cookie in self])
-        return None
+        upload_id = int(time.time() * 1000)
+        boundary = '----WebKitFormBoundary{}'.format(
+            ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(16)))
+        fields = [
+            ('upload_id', upload_id),
+            ('media_type', 1),
+        ]
+        files = [
+            ('photo', 'photo.jpg', 'application/octet-stream', photo_data)
+        ]
+        content_type, body = MultipartFormDataEncoder(boundary=boundary).encode(
+            fields, files)
+        headers = {
+            'User-Agent': self.mobile_user_agent,
+            'Accept': '*/*',
+            'Accept-Language': 'en-US',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'close',
+            'x-csrftoken': self.csrftoken,
+            'x-requested-with': 'XMLHttpRequest',
+            'x-instagram-ajax': '1',
+            'Origin': 'https://www.instagram.com',
+            'Referer': 'https://www.instagram.com/create/crop/',
+            'Content-Type': content_type,
+            'Content-Length': len(body)
+        }
+        endpoint = 'https://www.instagram.com/create/upload/photo/'
+        req = compat_urllib_request.Request(endpoint, body, headers=headers)
+        self.logger.debug('REQUEST: {0!s}'.format(endpoint))
 
-    def dump(self):
-        return compat_pickle.dumps(self._cookies)
+        try:
+            res = self.opener.open(req, timeout=self.timeout)
+            response_content = self._read_response(res)
+
+            self.logger.debug('RESPONSE: {0!s}'.format(response_content))
+            upload_res = json.loads(response_content)
+            if upload_res.get('status', '') != 'ok':
+                raise ClientError('Upload status: {}'.format(upload_res.get('status', '')))
+            upload_id = upload_res['upload_id']
+
+            headers['Referer'] = 'https://www.instagram.com/create/details/'
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            del headers['Content-Length']
+            endpoint = 'https://www.instagram.com/create/configure/'
+            res = self._make_request(
+                endpoint, headers=headers,
+                params={'upload_id': upload_id, 'caption': caption},
+                get_method=lambda: 'POST')
+            return res
+
+        except compat_urllib_error.HTTPError as e:
+            raise ClientError('HTTPError "{0!s}" while opening {1!s}'.format(e.reason, endpoint), e.code)
+
+    def tag_feed(self, tag, **kwargs):
+        """
+        Get a tag feed.
+
+        :param tag:
+        :param kwargs:
+            - **max_id**: For pagination
+        :return:
+        """
+        query = {'__a': '1'}
+        if kwargs:
+            query.update(kwargs)
+        endpoint = 'https://www.instagram.com/explore/tags/{0!s}/'.format(
+            compat_urllib_parse.quote(tag))
+        return self._make_request(endpoint, query=query)
+
+    def location_feed(self, location_id, **kwargs):
+        """
+        Get a location feed.
+
+        :param location_id:
+        :param kwargs:
+            - **max_id**: For pagination
+        :return:
+        """
+        query = {'__a': '1'}
+        if kwargs:
+            query.update(kwargs)
+        endpoint = 'https://www.instagram.com/explore/locations/{0!s}/'.format(location_id)
+        return self._make_request(endpoint, query=query)

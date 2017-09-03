@@ -2,7 +2,7 @@
 import re
 
 
-class ClientCompatPatch():
+class ClientCompatPatch(object):
     """Utility to make entities from the private api similar to the ones
     from the public one by adding the necessary properties, and if required,
     remove any incompatible properties (to save storage space for example).
@@ -12,15 +12,32 @@ class ClientCompatPatch():
 
     @classmethod
     def _generate_image_url(cls, url, size, crop):
+        """
+        Try to generate an IG cropped  image url.
+
+        :param url: target url
+        :param size: width/height of the image
+        :param crop: 'p' or 's'
+        :return:
+        """
         mobj = re.search(cls.IG_IMAGE_URL_EXPR, url)
         if not mobj:
-            replacement_expr = '\g<eparam>%(crop)s%(size)sx%(size)s/' % {'crop': crop, 'size': size}
+            replacement_expr = '\g<eparam>{crop!s}{size!s}x{size!s}/'.format(
+                **{'crop': crop, 'size': size})
             return re.sub(r'(?P<eparam>/e[0-9]+/)', replacement_expr, url)
-        replacement_expr = '/%(crop)s%(size)sx%(size)s/' % {'crop': mobj.group('crop') or crop, 'size': size}
+        replacement_expr = '/{crop!s}{size!s}x{size!s}/'.format(
+            **{'crop': mobj.group('crop') or crop, 'size': size})
         return re.sub(cls.IG_IMAGE_URL_EXPR, replacement_expr, url)
 
-    @classmethod
-    def _drop_keys(cls, obj, keys):
+    @staticmethod
+    def _drop_keys(obj, keys):
+        """
+        Remove the specified keys from the object.
+
+        :param obj: target object
+        :param keys: list of keys
+        :return:
+        """
         if not obj:
             return obj
         for k in keys:
@@ -29,37 +46,51 @@ class ClientCompatPatch():
     @classmethod
     def media(cls, media, drop_incompat_keys=False):
         """Patch a media object"""
-        media['link'] = 'https://www.instagram.com/p/%s/' % media['code']
-        caption = media.get('caption')
+        media_shortcode = media.get('code') or media.get('shortcode')   # for media_info2
+        media['link'] = 'https://www.instagram.com/p/{0!s}/'.format(media_shortcode)
+        try:
+            caption = (media.get('caption') or
+                       media.get('edge_media_to_caption', {}).get('edges', [{}])[0].get(
+                           'node', {}).get('text'))
+        except IndexError:
+            # no caption - edge_media_to_caption: { edges: [] }
+            caption = None
+
         if not caption:
             media['caption'] = None
         else:
             media['caption'] = {
                 'text': caption,
                 'from': media['owner'],
-                'id': str(abs(hash(caption + media['code'])) % (10 ** 12)),       # generate a psuedo 12-char ID
+                # generate a psuedo 12-char ID
+                'id': str(abs(hash(caption + media_shortcode)) % (10 ** 12)),
             }
         media['tags'] = []
         media['filter'] = ''
         media['attribution'] = None
         media['user_has_liked'] = False
-        media['user'] = {
+        media_user = {
             'id': media['owner']['id'],
-            'username': media['owner']['username'],
-            'full_name': media['owner']['full_name'],
-            'profile_picture': media['owner']['profile_pic_url'],
         }
+        if 'username' in media['owner']:
+            media_user['username'] = media['owner']['username']
+        if 'full_name' in media['owner']:
+            media_user['full_name'] = media['owner']['full_name']
+        if 'profile_pic_url' in media['owner']:
+            media_user['profile_picture'] = media['owner']['profile_pic_url']
+        media['user'] = media_user
         media['type'] = 'video' if media['is_video'] else 'image'
+        display_src = media.get('display_src') or media.get('display_url')  # for media_info2
         images = {
             'standard_resolution': {
-                'url': media['display_src'],
+                'url': display_src,
                 'width': media['dimensions']['width'],
                 'height': media['dimensions']['height']},
-            'low_resolution': {'url': cls._generate_image_url(media['display_src'], '320', 'p')},
-            'thumbnail': {'url': cls._generate_image_url(media['display_src'], '150', 's')},
+            'low_resolution': {'url': cls._generate_image_url(display_src, '320', 'p')},
+            'thumbnail': {'url': cls._generate_image_url(display_src, '150', 's')},
         }
         media['images'] = images
-        if media['is_video']:
+        if media['is_video'] and media.get('video_url'):
             videos = {
                 'standard_resolution': {
                     'url': media['video_url'],
@@ -70,22 +101,28 @@ class ClientCompatPatch():
             }
             media['videos'] = videos
         media['likes'] = {
-            'count': media.get('likes', {}).get('count', 0),
+            'count': (media.get('likes', {})
+                      or media.get('edge_liked_by', {})).get('count', 0),
             'data': []
         }
         media['comments'] = {
-            'count': media.get('comments', {}).get('count', 0),
+            'count': (media.get('comments', {})
+                      or media.get('edge_media_to_comment', {})).get('count', 0),
             'data': []
         }
-        if 'location' not in media or not media['location'] or not media['location'].get('lat'):
+        # Try to preserve location even if there's no lat/lng
+        if 'location' not in media or not media['location']:
             media['location'] = None
-        else:
+        elif media.get('location', {}).get('lat') and media.get('location', {}).get('lng'):
             media['location']['latitude'] = media['location']['lat']
             media['location']['longitude'] = media['location']['lng']
-        media['id'] = '%s_%s' % (media['id'], media['owner']['id'])
-        media['created_time'] = str(media['date'])
+        media['id'] = '{0!s}_{1!s}'.format(media['id'], media['owner']['id'])
+        media['created_time'] = str(
+            media.get('date', '') or media.get('taken_at_timestamp', ''))
 
-        usertags = media.get('usertags', {}).get('nodes', [])
+        usertags = (
+            media.get('usertags', {}).get('nodes', []) or
+            [ut['node'] for ut in media.get('edge_media_to_tagged_user', {}).get('edges', [])])
         if not usertags:
             media['users_in_photo'] = []
         else:
@@ -106,8 +143,10 @@ class ClientCompatPatch():
                         'url': node['display_url'],
                         'width': node['dimensions']['width'],
                         'height': node['dimensions']['height']},
-                    'low_resolution': {'url': cls._generate_image_url(node['display_url'], '320', 'p')},
-                    'thumbnail': {'url': cls._generate_image_url(node['display_url'], '150', 's')},
+                    'low_resolution': {
+                        'url': cls._generate_image_url(node['display_url'], '320', 'p')},
+                    'thumbnail': {
+                        'url': cls._generate_image_url(node['display_url'], '150', 's')},
                 }
                 node['images'] = images
                 node['type'] = 'image'
@@ -123,7 +162,7 @@ class ClientCompatPatch():
                     node['videos'] = videos
                     node['type'] = 'video'
                 node['pk'] = node['id']
-                node['id'] = '%s_%s' % (node['id'], media['owner']['id'])
+                node['id'] = '{0!s}_{1!s}'.format(node['id'], media['owner']['id'])
                 node['original_width'] = node['dimensions']['width']
                 node['original_height'] = node['dimensions']['height']
                 carousel_media.append(node)
@@ -155,11 +194,12 @@ class ClientCompatPatch():
     def comment(cls, comment, drop_incompat_keys=False):
         """Patch a comment object"""
         comment['created_time'] = str(int(comment['created_at']))
+        comment_user = comment.get('user') or comment.get('owner')
         from_user = {
-            'id': comment['user']['id'],
-            'profile_picture': comment['user'].get('profile_pic_url'),
-            'username': comment['user']['username'],
-            'full_name': comment['user'].get('full_name') or ''
+            'id': comment_user['id'],
+            'profile_picture': comment_user.get('profile_pic_url'),
+            'username': comment_user['username'],
+            'full_name': comment_user.get('full_name') or ''
         }
         comment['from'] = from_user
         if drop_incompat_keys:

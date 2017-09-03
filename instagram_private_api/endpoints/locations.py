@@ -3,6 +3,7 @@ import time
 
 
 class LocationsEndpointsMixin(object):
+    """For endpoints related to location functionality."""
 
     def location_info(self, location_id):
         """
@@ -26,7 +27,7 @@ class LocationsEndpointsMixin(object):
                   }
                 }
         """
-        endpoint = 'locations/%(location_id)s/info/' % {'location_id': location_id}
+        endpoint = 'locations/{location_id!s}/info/'.format(**{'location_id': location_id})
         return self._call_api(endpoint)
 
     def location_related(self, location_id, **kwargs):
@@ -36,7 +37,7 @@ class LocationsEndpointsMixin(object):
         :param location_id:
         :return:
         """
-        endpoint = 'locations/%(location_id)s/related/' % {'location_id': location_id}
+        endpoint = 'locations/{location_id!s}/related/'.format(**{'location_id': location_id})
         query = {
             'visited': json.dumps([{'id': location_id, 'type': 'location'}], separators=(',', ':')),
             'related_types': json.dumps(['location'], separators=(',', ':'))}
@@ -62,3 +63,14 @@ class LocationsEndpointsMixin(object):
             query_params['search_query'] = query
         query_params.update(kwargs)
         return self._call_api('location_search/', query=query_params)
+
+    def location_fb_search(self, query):
+        """
+        Search for locations by query text
+
+        :param query: search terms
+        :return:
+        """
+        return self._call_api(
+            'fbsearch/places/',
+            query={'ranked_token': self.rank_token, 'query': query})

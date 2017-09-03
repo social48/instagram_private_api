@@ -14,6 +14,7 @@ import sys
 
 
 class Checkpoint:
+    """OBSOLETE. No longer working or supported."""
 
     USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 9_3_3 like Mac OS X) ' \
                  'AppleWebKit/601.1.46 (KHTML, like Gecko) Mobile/13G34 ' \
@@ -52,9 +53,9 @@ class Checkpoint:
         cookie_val = res.info().get('set-cookie') or ''
         cookie = ''
         for c in ['sessionid', 'checkpoint_step', 'mid', 'csrftoken']:
-            cookie_mobj = re.search(r'%s=(?P<val>[^;]+?);' % c, cookie_val)
+            cookie_mobj = re.search(r'{0!s}=(?P<val>[^;]+?);'.format(c), cookie_val)
             if cookie_mobj:
-                cookie += '%s=%s; ' % (c, unquote_plus(cookie_mobj.group('val')))
+                cookie += '{0!s}={1!s}; '.format(c, unquote_plus(cookie_mobj.group('val')))
 
         self.cookie = cookie
         data = {'csrfmiddlewaretoken': csrf, 'email': 'Verify by Email'}    # 'sms': 'Verify by SMS'
@@ -132,4 +133,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as e:
-        print('Unexpected error: %s' % str(e))
+        print('Unexpected error: {0!s}'.format(str(e)))

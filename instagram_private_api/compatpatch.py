@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
+from .endpoints.common import MediaTypes
 
 
-class ClientCompatPatch():
+class ClientCompatPatch(object):
     """Utility to make entities from the private api similar to the ones
     from the public one by adding the necessary properties, and if required,
     remove any incompatible properties (to save storage space for example).
@@ -55,8 +56,8 @@ class ClientCompatPatch():
         643: 'SubtleColor',
     }
 
-    @classmethod
-    def _get_closest_size(cls, medias, width, height=0):
+    @staticmethod
+    def _get_closest_size(medias, width, height=0):
         """
         Try to extract a image/video object that will most match the resolution returned by the public API
 
@@ -78,8 +79,8 @@ class ClientCompatPatch():
 
         return current
 
-    @classmethod
-    def _drop_keys(cls, obj, keys):
+    @staticmethod
+    def _drop_keys(obj, keys):
         """
         Drop unwanted dict keys
 
@@ -123,14 +124,14 @@ class ClientCompatPatch():
     @classmethod
     def media(cls, media, drop_incompat_keys=False):
         """Patch a media object"""
-        media['link'] = 'https://www.instagram.com/p/%s/' % media['code']
+        media['link'] = 'https://www.instagram.com/p/{0!s}/'.format(media['code'])
         media['created_time'] = str(int(media.get('taken_at') or media.get('device_timestamp')))
 
-        if media['media_type'] == 1:
+        if media['media_type'] == MediaTypes.PHOTO:
             media['type'] = 'image'
-        elif media['media_type'] == 2:
+        elif media['media_type'] == MediaTypes.VIDEO:
             media['type'] = 'video'
-        elif media['media_type'] == 8:
+        elif media['media_type'] == MediaTypes.CAROUSEL:
             media['type'] = 'carousel'  # will be patched over below
 
         if media['caption']:
@@ -160,25 +161,27 @@ class ClientCompatPatch():
                     ]
                 )
         media['user'] = cls.list_user(media['user'], drop_incompat_keys=drop_incompat_keys)
-        if media['media_type'] == 8 and media.get('carousel_media', []):
+        if media['media_type'] == MediaTypes.CAROUSEL and media.get('carousel_media', []):
             # patch carousel media
             for carousel_media in media.get('carousel_media', []):
-                if carousel_media['media_type'] == 1:
+                if carousel_media['media_type'] == MediaTypes.PHOTO:
                     carousel_media['type'] = 'image'
-                elif carousel_media['media_type'] == 2:
+                elif carousel_media['media_type'] == MediaTypes.VIDEO:
                     carousel_media['type'] = 'video'
                 image_versions2 = carousel_media.get('image_versions2', {}).get('candidates', [])
                 images = {
                     'low_resolution': cls._get_closest_size(image_versions2, 320),
                     'thumbnail': cls._get_closest_size(image_versions2, 150, 150),
-                    'standard_resolution': cls._get_closest_size(image_versions2, media.get('original_width', 1000)),
+                    'standard_resolution': cls._get_closest_size(
+                        image_versions2, carousel_media.get('original_width', 1000)),
                 }
                 carousel_media['images'] = images
-                if carousel_media['media_type'] == 2:
+                if carousel_media['media_type'] == MediaTypes.VIDEO:
                     video_versions = carousel_media.get('video_versions', [])
                     videos = {
                         'low_bandwidth': cls._get_closest_size(video_versions, 480),
-                        'standard_resolution': cls._get_closest_size(video_versions, media.get('original_width', 640)),
+                        'standard_resolution': cls._get_closest_size(
+                            video_versions, carousel_media.get('original_width', 640)),
                         'low_resolution': cls._get_closest_size(video_versions, 640),
                     }
                     if drop_incompat_keys:
@@ -213,7 +216,7 @@ class ClientCompatPatch():
             first_carousel_media = media['carousel_media'][0]
             media['images'] = first_carousel_media['images']
             media['type'] = first_carousel_media['type']
-            if first_carousel_media['media_type'] == 2:
+            if first_carousel_media['media_type'] == MediaTypes.VIDEO:
                 media['videos'] = first_carousel_media['videos']
         else:
             image_versions2 = media.get('image_versions2', {}).get('candidates', [])
@@ -224,7 +227,7 @@ class ClientCompatPatch():
             }
             media['images'] = images
 
-        if media['media_type'] == 2:
+        if media['media_type'] == MediaTypes.VIDEO:
             video_versions = media.get('video_versions', [])
             videos = {
                 'low_bandwidth': cls._get_closest_size(video_versions, 480),
@@ -261,12 +264,25 @@ class ClientCompatPatch():
         else:
             media['filter'] = ''
         media['user_has_liked'] = media.get('has_liked', False)
-        if 'location' not in media or not media['location'].get('lat'):
+
+        # Try to preserve location even if there's no lat/lng/pk
+        if 'location' not in media or not media['location']:
             media['location'] = None
-        else:
+        elif (media.get('location', {}).get('lat')
+              and media.get('location', {}).get('lng')
+              and media.get('location', {}).get('pk')):
             media['location']['latitude'] = media['location']['lat']
             media['location']['longitude'] = media['location']['lng']
             media['location']['id'] = media['location']['pk']
+        # For stories
+        if (not media.get('location')
+                and media.get('story_locations')
+                and media.get('story_locations', [{}])[0].get('location')):
+            story_location = media['story_locations'][0]['location']
+            if (story_location.get('lat')
+                    and story_location.get('lng')
+                    and story_location.get('pk')):
+                media['location'] = story_location
 
         media['tags'] = []
         if media.get('usertags', {}).get('in', []):
@@ -307,11 +323,13 @@ class ClientCompatPatch():
             cls._drop_keys(
                 media,
                 [
+                    'can_viewer_save',
                     'caption_is_edited',
                     'client_cache_key',
                     'code',
                     'comment_count',
-                    'comments_disabled'
+                    'comments_disabled',
+                    'comment_likes_enabled',
                     'device_timestamp',
                     'filter_type',
                     'has_audio',
@@ -332,10 +350,13 @@ class ClientCompatPatch():
                     'pk',
                     'preview_comments',
                     'reel_mentions',
+                    'saved_collection_ids',
                     'taken_at',
+                    'top_likers',
                     'video_duration',
                     'video_versions',
                     'view_count',
+                    'visibility',
                 ]
             )
             if media['location']:

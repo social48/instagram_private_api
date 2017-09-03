@@ -1,155 +1,30 @@
 import unittest
 import argparse
 import os
-import time
 import json
-import copy
 import sys
 import logging
 import re
 import warnings
-try:
-    from instagram_web_api import (
-        __version__, Client, ClientError, ClientLoginError,
-        ClientCookieExpiredError, ClientCompatPatch)
-except ImportError:
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from instagram_web_api import (
-        __version__, Client, ClientError, ClientLoginError,
-        ClientCookieExpiredError, ClientCompatPatch)
 
-
-class TestWebApi(unittest.TestCase):
-
-    def __init__(self, testname, api):
-        super(TestWebApi, self).__init__(testname)
-        self.api = api
-
-    @classmethod
-    def setUpClass(cls):
-        pass
-
-    @classmethod
-    def tearDownClass(cls):
-        pass
-
-    def setUp(self):
-        self.test_user_id = '25025320'
-        self.test_media_shortcode = 'BJL-gjsDyo1'
-        self.test_media_id = '1009392755603152985'
-        self.test_comment_id = '1234567890'
-
-    def tearDown(self):
-        time.sleep(5)   # sleep a bit between tests to avoid HTTP429 errors
-
-    def test_user_info(self):
-        results = self.api.user_info(self.test_user_id)
-        self.assertEqual(results.get('status'), 'ok')
-        self.assertIsNotNone(results.get('profile_picture'))
-
-    def test_user_feed(self):
-        results = self.api.user_feed(self.test_user_id)
-        self.assertGreater(len(results), 0)
-
-    def test_media_info(self):
-        results = self.api.media_info(self.test_media_shortcode)
-        self.assertEqual(results.get('status'), 'ok')
-        self.assertIsNotNone(results.get('link'))
-        self.assertIsNotNone(results.get('images'))
-
-    def test_carousel_media_info(self):
-        results = self.api.media_info2('BQ0eAlwhDrw')
-        self.assertIsNotNone(results.get('link'))
-        self.assertIsNotNone(results.get('type'))
-        self.assertIsNotNone(results.get('images'))
-
-    def test_media_comments(self):
-        results = self.api.media_comments(self.test_media_shortcode, count=20)
-        self.assertGreaterEqual(len(results), 0)
-
-    def test_user_followers(self):
-        results = self.api.user_followers(self.test_user_id)
-        self.assertGreater(len(results), 0)
-
-    def test_user_following(self):
-        results = self.api.user_following(self.test_user_id)
-        self.assertGreater(len(results), 0)
-
-    @unittest.skip('Modifies data.')
-    def test_post_comment(self):
-        results = self.api.post_comment(self.test_media_id, '<3')
-        self.assertEqual(results.get('status'), 'ok')
-        self.assertIsNotNone(results.get('id'))
-
-    @unittest.skip('Modifies data / Needs actual data.')
-    def test_del_comment(self):
-        results = self.api.delete_comment(self.test_media_id, self.test_comment_id)
-        self.assertEqual(results.get('status'), 'ok')
-
-    def test_search(self):
-        results = self.api.search('maru')
-        self.assertGreaterEqual(len(results['users']), 0)
-        self.assertGreaterEqual(len(results['hashtags']), 0)
-
-    # Compat Patch Tests
-    def test_compat_media(self):
-        self.api.auto_patch = False
-        media = self.api.media_info(self.test_media_shortcode)
-        media_patched = copy.deepcopy(media)
-        ClientCompatPatch.media(media_patched)
-        self.api.auto_patch = True
-        self.assertIsNone(media.get('link'))
-        self.assertIsNotNone(media_patched.get('link'))
-        self.assertIsNone(media.get('user'))
-        self.assertIsNotNone(media_patched.get('user'))
-        self.assertIsNone(media.get('type'))
-        self.assertIsNotNone(media_patched.get('type'))
-        self.assertIsNone(media.get('images'))
-        self.assertIsNotNone(media_patched.get('images'))
-        self.assertIsNone(media.get('created_time'))
-        self.assertIsNotNone(media_patched.get('created_time'))
-        self.assertIsNotNone(re.match(r'\d+_\d+', media_patched['id']))
-
-    def test_compat_comment(self):
-        self.api.auto_patch = False
-        comment = self.api.media_comments(self.test_media_shortcode, count=1)[0]
-        comment_patched = copy.deepcopy(comment)
-        self.api.auto_patch = True
-        ClientCompatPatch.comment(comment_patched)
-        self.assertIsNone(comment.get('created_time'))
-        self.assertIsNotNone(comment_patched.get('created_time'))
-        self.assertIsNone(comment.get('from'))
-        self.assertIsNotNone(comment_patched.get('from'))
-
-    def test_compat_user(self):
-        self.api.auto_patch = False
-        user = self.api.user_info(self.test_user_id)
-        user_patched = copy.deepcopy(user)
-        ClientCompatPatch.user(user_patched)
-        self.api.auto_patch = True
-        self.assertIsNone(user.get('bio'))
-        self.assertIsNotNone(user_patched.get('bio'))
-        self.assertIsNone(user.get('profile_picture'))
-        self.assertIsNotNone(user_patched.get('profile_picture'))
-        self.assertIsNone(user.get('website'))
-        self.assertIsNotNone(user_patched.get('website'))
-        self.assertIsNone(user.get('counts'))
-        self.assertIsNotNone(user_patched.get('counts'))
-
-    def test_compat_user_list(self):
-        self.api.auto_patch = False
-        user = self.api.user_followers(self.test_user_id)[0]
-        user_patched = copy.deepcopy(user)
-        ClientCompatPatch.list_user(user_patched)
-        self.api.auto_patch = True
-        self.assertIsNone(user.get('profile_picture'))
-        self.assertIsNotNone(user_patched.get('profile_picture'))
-
+from .common import (
+    __webversion__ as __version__,
+    to_json, from_json,
+    WebClient as Client,
+    WebClientError as ClientError,
+    WebClientLoginError as ClientLoginError,
+    WebClientCookieExpiredError as ClientCookieExpiredError
+)
+from .web import (
+    ClientTests, MediaTests, UserTests,
+    CompatPatchTests, UploadTests,
+    FeedTests
+)
 
 if __name__ == '__main__':
 
     warnings.simplefilter('ignore', UserWarning)
-    logging.basicConfig()
+    logging.basicConfig(format='%(name)s %(message)s')
     logger = logging.getLogger('instagram_web_api')
     logger.setLevel(logging.WARNING)
 
@@ -168,12 +43,12 @@ if __name__ == '__main__':
     if args.debug:
         logger.setLevel(logging.DEBUG)
 
-    print('Client version: %s' % __version__)
+    print('Client version: {0!s}'.format(__version__))
 
     cached_auth = None
     if args.settings_file_path and os.path.isfile(args.settings_file_path):
         with open(args.settings_file_path) as file_data:
-            cached_auth = json.load(file_data)
+            cached_auth = json.load(file_data, object_hook=from_json)
 
     api = None
     if not cached_auth and args.username and args.password:
@@ -191,7 +66,7 @@ if __name__ == '__main__':
         if args.save:
             # this auth cache can be re-used for up to 90 days
             with open(args.settings_file_path, 'w') as outfile:
-                json.dump(cached_auth, outfile)
+                json.dump(cached_auth, outfile, default=to_json)
 
     elif cached_auth and args.username and args.password:
         try:
@@ -213,75 +88,17 @@ if __name__ == '__main__':
     if not api:
         raise Exception('Unable to initialise api.')
 
-    tests = [
-        {
-            'name': 'test_user_info',
-            'test': TestWebApi('test_user_info', api),
-        },
-        {
-            'name': 'test_user_feed',
-            'test': TestWebApi('test_user_feed', api),
-        },
-        {
-            'name': 'test_media_info',
-            'test': TestWebApi('test_media_info', api),
-        },
-        {
-            'name': 'test_media_comments',
-            'test': TestWebApi('test_media_comments', api),
-        },
-        {
-            'name': 'test_search',
-            'test': TestWebApi('test_search', api),
-        },
-        {
-            'name': 'test_user_followers',
-            'test': TestWebApi('test_user_followers', api),
-            'require_auth': True,
-        },
-        {
-            'name': 'test_user_following',
-            'test': TestWebApi('test_user_followers', api),
-            'require_auth': True,
-        },
-        {
-            'name': 'test_post_comment',
-            'test': TestWebApi('test_user_followers', api),
-            'require_auth': True,
-        },
-        {
-            'name': 'test_del_comment',
-            'test': TestWebApi('test_user_followers', api),
-            'require_auth': True,
-        },
-        {
-            'name': 'test_compat_media',
-            'test': TestWebApi('test_compat_media', api),
-        },
-        {
-            'name': 'test_compat_comment',
-            'test': TestWebApi('test_compat_comment', api),
-        },
-        {
-            'name': 'test_compat_user',
-            'test': TestWebApi('test_compat_user', api),
-        },
-        {
-            'name': 'test_compat_user_list',
-            'test': TestWebApi('test_compat_user_list', api),
-            'require_auth': True,
-        },
-        {
-            'name': 'test_carousel_media_info',
-            'test': TestWebApi('test_carousel_media_info', api),
-        }
-    ]
-
-    suite = unittest.TestSuite()
+    tests = []
+    tests.extend(ClientTests.init_all(api))
+    tests.extend(MediaTests.init_all(api))
+    tests.extend(UserTests.init_all(api))
+    tests.extend(CompatPatchTests.init_all(api))
+    tests.extend(UploadTests.init_all(api))
+    tests.extend(FeedTests.init_all(api))
 
     def match_regex(test_name):
         for test_re in args.tests:
-            test_re = r'%s' % test_re
+            test_re = r'{0!s}'.format(test_re)
             if re.match(test_re, test_name):
                 return True
         return False
@@ -292,10 +109,12 @@ if __name__ == '__main__':
     if not api.is_authenticated:
         tests = filter(lambda x: not x.get('require_auth', False), tests)
 
-    for test in tests:
-        suite.addTest(test['test'])
-
     try:
-        unittest.TextTestRunner(verbosity=2).run(suite)
+        suite = unittest.TestSuite()
+        for test in tests:
+            suite.addTest(test['test'])
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        sys.exit(not result.wasSuccessful())
+
     except ClientError as e:
-        print('Unexpected ClientError %s (Code: %d)' % (e.msg, e.code))
+        print('Unexpected ClientError {0!s} (Code: {1:d})'.format(e.msg, e.code))

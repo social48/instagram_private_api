@@ -1,19 +1,20 @@
 
-class Constants:
+class Constants(object):
+    """Constants holder class that stores the bulk of the fixed strings used in the library."""
 
-    IG_SIG_KEY = 'b03e0daaf2ab17cda2a569cace938d639d1288a1197f9ecf97efd0a4ec0874d7'
-    IG_CAPABILITIES = '3boBAA=='    # = base64.b64encode(struct.pack('<i', 113373)).decode('ascii')
+    IG_SIG_KEY = '4f8732eb9ba7d1c8e8897a75d6474d4eb3f5279137431b2aafb71fafe2abe178'
+    IG_CAPABILITIES = '3boDAA=='    # = base64.b64encode(struct.pack('<i', 244445)).decode('ascii')
     SIG_KEY_VERSION = '4'
 
-    APP_VERSION = '10.15.0'
-    ANDROID_VERSION = 18
-    ANDROID_RELEASE = '4.3'
-    PHONE_MANUFACTURER = 'Xiaomi'
-    PHONE_DEVICE = 'HM 1SW'
-    PHONE_MODEL = 'armani'
-    PHONE_DPI = '320dpi'
-    PHONE_RESOLUTION = '720x1280'
-    PHONE_CHIPSET = 'qcom'
+    APP_VERSION = '10.26.0'
+    ANDROID_VERSION = 23
+    ANDROID_RELEASE = '6.0.1'
+    PHONE_MANUFACTURER = 'samsung'
+    PHONE_DEVICE = 'SM-G930F'
+    PHONE_MODEL = 'herolte'
+    PHONE_DPI = '640dpi'
+    PHONE_RESOLUTION = '1440x2560'
+    PHONE_CHIPSET = 'samsungexynos8890'
 
     USER_AGENT_FORMAT = \
         'Instagram %(app_version)s Android (%(android_version)d/%(android_release)s; ' \

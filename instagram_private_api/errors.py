@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 
-class ClientErrorCodes:
+class ClientErrorCodes(object):
     """Holds static constant values for the http error codes returned from IG"""
 
     INTERNAL_SERVER_ERROR = 500
@@ -40,4 +40,9 @@ class ClientCookieExpiredError(ClientError):
 
 class ClientThrottledError(ClientError):
     """Raised when client detects a 429 http response."""
+    pass
+
+
+class ClientConnectionError(ClientError):
+    """Raised due to network connectivity-related issues"""
     pass
