@@ -177,7 +177,7 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
 
         # [TODO] There's probably a better way than to depend on cookie_string
         # or not self.token or not self.rank_token:
-        if not cookie_repr:   
+        if not cookie_string:   
             if not self.username or not self.password:
                 raise ClientLoginRequiredError('login_required', code=400)
             self.login()
