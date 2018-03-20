@@ -1,5 +1,26 @@
 # Change Log
 
+## 1.4.1
+- App API:
+    * Refactored error detection. New ``ClientCheckpointRequiredError``, ``ClientChallengeRequiredError``, ``ClientSentryBlockError``
+    * New highlight endpoints
+    * New ``comment_inline_replies()`` endpoint
+    * New ``story_viewers()`` endpoint
+    * Updates for user feed and comments endpoints
+
+## 1.4.0
+- Common:
+    * __BREAKING CHANGE__: New ClientConnectionError for network-related errors
+- App API:
+    * Add comment replies endpoint
+    * Add presence endpoints
+    * Add tag following endpoints
+    * Update user and tag search endpoints
+    * Update app version to 26
+- Web API:
+    * __BREAKING CHANGE__: Tag and Location feeds updated to use graphql endpoints.
+    * Add timeline feed, reels tray, reels (stories) feed
+
 ## 1.3.6
 - App API:
     * Minor fixes

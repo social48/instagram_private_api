@@ -6,9 +6,15 @@ from io import BytesIO
 try:
     # python 2.x
     from urllib2 import urlopen
+    import urllib2 as compat_urllib_request
 except ImportError:
     # python 3.x
     from urllib.request import urlopen
+    import urllib.request as compat_urllib_request
+try:
+    from urllib.parse import urlparse as compat_urllib_parse_urlparse
+except ImportError:  # Python 2
+    from urlparse import urlparse as compat_urllib_parse_urlparse
 
 from ..common import (
     ClientError, ApiTestBase, compat_mock, compat_urllib_error, MockResponse,
@@ -74,6 +80,14 @@ class UploadTests(ApiTestBase):
         self.assertEqual(results.get('status'), 'ok')
         self.assertIsNotNone(results.get('media'))
 
+    def strip_url_params(self, thumbnail_url):
+        o = compat_urllib_parse_urlparse(thumbnail_url)
+        return '{scheme}://{host}{path}'.format(
+            scheme=o.scheme,
+            host=o.netloc,
+            path=o.path
+        )
+
     @unittest.skip('Modifies data.')
     def test_post_video(self):
         # Reposting https://streamable.com/deltx
@@ -84,9 +98,14 @@ class UploadTests(ApiTestBase):
         video_url = ('https:' if mp4_info['url'].startswith('//') else '') + mp4_info['url']
         video_size = (mp4_info['width'], mp4_info['height'])
         thumbnail_url = ('https:' if video_info['thumbnail_url'].startswith('//') else '') + video_info['thumbnail_url']
+        # remove height param
+        thumbnail_url = self.strip_url_params(thumbnail_url)
         duration = mp4_info['duration']
 
-        video_res = urlopen(video_url)
+        # requires UA
+        video_req = compat_urllib_request.Request(
+            video_url, headers={'user-agent': 'Mozilla/5.0'})
+        video_res = urlopen(video_req)
         video_data = video_res.read()
         thumb_res = urlopen(thumbnail_url)
         thumb_data = thumb_res.read()
@@ -128,9 +147,14 @@ class UploadTests(ApiTestBase):
         video_url = ('https:' if mp4_info['url'].startswith('//') else '') + mp4_info['url']
         video_size = (mp4_info['width'], mp4_info['height'])
         thumbnail_url = ('https:' if video_info['thumbnail_url'].startswith('//') else '') + video_info['thumbnail_url']
+        # remove height param
+        thumbnail_url = self.strip_url_params(thumbnail_url)
         duration = mp4_info['duration']
 
-        video_res = urlopen(video_url)
+        # requires UA
+        video_req = compat_urllib_request.Request(
+            video_url, headers={'user-agent': 'Mozilla/5.0'})
+        video_res = urlopen(video_req)
         video_data = video_res.read()
         thumb_res = urlopen(thumbnail_url)
         thumb_data = thumb_res.read()
@@ -148,9 +172,14 @@ class UploadTests(ApiTestBase):
         video_url = ('https:' if mp4_info['url'].startswith('//') else '') + mp4_info['url']
         video_size = (mp4_info['width'], mp4_info['height'])
         thumbnail_url = ('https:' if video_info['thumbnail_url'].startswith('//') else '') + video_info['thumbnail_url']
+        # remove height param
+        thumbnail_url = self.strip_url_params(thumbnail_url)
         duration = mp4_info['duration']
 
-        video_res = urlopen(video_url)
+        # requires UA
+        video_req = compat_urllib_request.Request(
+            video_url, headers={'user-agent': 'Mozilla/5.0'})
+        video_res = urlopen(video_req)
         video_data = video_res.read()
         thumb_res = urlopen(thumbnail_url)
         thumb_data = thumb_res.read()

@@ -1,3 +1,8 @@
+# Copyright (c) 2017 https://github.com/ping
+#
+# This software is released under the MIT License.
+# https://opensource.org/licenses/MIT
+
 # -*- coding: utf-8 -*-
 
 import logging
@@ -10,13 +15,24 @@ import warnings
 from functools import wraps
 import string
 import random
-
+from socket import timeout, error as SocketError
+from ssl import SSLError
 from .compat import (
     compat_urllib_request, compat_urllib_parse,
-    compat_urllib_parse_urlparse, compat_urllib_error
+    compat_urllib_parse_urlparse, compat_urllib_error,
+    compat_http_client
 )
 from .compatpatch import ClientCompatPatch
-from .errors import ClientError, ClientLoginError, ClientCookieExpiredError
+from .errors import (
+    ClientError, ClientLoginError, ClientCookieExpiredError,
+    ClientConnectionError
+)
+try:  # Python 3:
+    # Not a no-op, we're adding this to the namespace so it can be imported.
+    ConnectionError = ConnectionError
+except NameError:  # Python 2:
+    class ConnectionError(Exception):
+        pass
 from .http import ClientCookieJar, MultipartFormDataEncoder
 from .common import ClientDeprecationWarning
 
@@ -38,10 +54,8 @@ class Client(object):
 
     API_URL = 'https://www.instagram.com/query/'
     GRAPHQL_API_URL = 'https://www.instagram.com/graphql/query/'
-    USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/601.6.17 (KHTML, like Gecko) ' \
-                 'Version/9.1.1 Safari/601.6.17'
-    MOBILE_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 9_1 like Mac OS X) ' \
-                        'AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 Mobile/13B143 Safari/601.1'
+    USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_1) AppleWebKit/604.3.5 (KHTML, like Gecko) Version/11.0.1 Safari/604.3.5'    # noqa
+    MOBILE_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 11_1 like Mac OS X) AppleWebKit/604.3.5 (KHTML, like Gecko) Version/11.0 Mobile/15B93 Safari/604.1'     # noqa
 
     def __init__(self, user_agent=None, **kwargs):
         """
@@ -228,8 +242,12 @@ class Client(object):
 
         except compat_urllib_error.HTTPError as e:
             raise ClientError('HTTPError "{0!s}" while opening {1!s}'.format(e.reason, url), e.code)
-        except compat_urllib_error.URLError as e:
-            raise ClientError('URLError "{0!s}" while opening {1!s}'.format(e.reason, url))
+        except (SSLError, timeout, SocketError,
+                compat_urllib_error.URLError,   # URLError is base of HTTPError
+                compat_http_client.HTTPException,
+                ConnectionError) as connection_error:
+            raise ClientConnectionError('{} {}'.format(
+                connection_error.__class__.__name__, str(connection_error)))
 
     @staticmethod
     def _sanitise_media_id(media_id):
@@ -295,8 +313,8 @@ class Client(object):
         endpoint = 'https://www.instagram.com/{username!s}/'.format(**{'username': user_name})
         info = self._make_request(endpoint, query={'__a': '1'})
         if self.auto_patch:
-            ClientCompatPatch.user(info['user'], drop_incompat_keys=self.drop_incompat_keys)
-        return info['user']
+            ClientCompatPatch.user(info['graphql']['user'], drop_incompat_keys=self.drop_incompat_keys)
+        return info['graphql']['user']
 
     def user_feed(self, user_id, **kwargs):
         """
@@ -320,7 +338,7 @@ class Client(object):
         end_cursor = kwargs.pop('end_cursor', None)
 
         query = {
-            'query_id': '17880160963012870',
+            'query_id': '17888483320059182',
             'id': user_id,
             'first': count}
 
@@ -410,10 +428,16 @@ class Client(object):
         count = kwargs.pop('count', 16)
         end_cursor = kwargs.pop('end_cursor', None)
 
+        variables = {
+            'shortcode': short_code,
+            'first': int(count)
+        }
+        if end_cursor:
+            variables['after'] = end_cursor
         query = {
             'query_id': '17852405266163336',
-            'shortcode': short_code,
-            'first': count}
+            'variables': json.dumps(variables, separators=(',', ':'))
+        }
 
         if end_cursor:
             query['after'] = end_cursor
@@ -448,13 +472,17 @@ class Client(object):
         """
         count = kwargs.pop('count', 10)
         end_cursor = kwargs.pop('end_cursor', None)
-        query = {
-            'query_id': '17874545323001329',
+        variables = {
             'id': user_id,
-            'first': count,
+            'first': int(count)
         }
         if end_cursor:
-            query['after'] = end_cursor
+            variables['after'] = end_cursor
+
+        query = {
+            'query_id': '17874545323001329',
+            'variables': json.dumps(variables, separators=(',', ':'))
+        }
 
         info = self._make_request(self.GRAPHQL_API_URL, query=query)
         if self.auto_patch:
@@ -481,13 +509,17 @@ class Client(object):
         """
         count = kwargs.pop('count', 10)
         end_cursor = kwargs.pop('end_cursor', None)
-        query = {
-            'query_id': '17851374694183129',
+        variables = {
             'id': user_id,
-            'first': count,
+            'first': int(count)
         }
         if end_cursor:
-            query['after'] = end_cursor
+            variables['after'] = end_cursor
+
+        query = {
+            'query_id': '17851374694183129',
+            'variables': json.dumps(variables, separators=(',', ':'))
+        }
 
         info = self._make_request(self.GRAPHQL_API_URL, query=query)
         if self.auto_patch:
@@ -579,7 +611,7 @@ class Client(object):
                         "id": "1234567890",
                         "full_name": "Somebody"
                     },
-                    "id": "1785811280000000"
+                    "id": "1785800000"
                 }
         """
         if len(comment_text) > 300:
@@ -696,15 +728,25 @@ class Client(object):
 
         :param tag:
         :param kwargs:
-            - **max_id**: For pagination
+            - **count**: Number of records to return
+            - **end_cursor**: For pagination
         :return:
         """
-        query = {'__a': '1'}
-        if kwargs:
-            query.update(kwargs)
-        endpoint = 'https://www.instagram.com/explore/tags/{0!s}/'.format(
-            compat_urllib_parse.quote(tag))
-        return self._make_request(endpoint, query=query)
+        count = kwargs.pop('count', 16)
+        end_cursor = kwargs.pop('end_cursor', None) or kwargs.pop('max_id', None)
+
+        variables = {
+            'tag_name': tag,
+            'first': int(count)
+        }
+        if end_cursor:
+            variables['after'] = end_cursor
+        query = {
+            'query_id': '17875800862117404',
+            'variables': json.dumps(variables, separators=(',', ':'))
+        }
+
+        return self._make_request(self.GRAPHQL_API_URL, query=query)
 
     def location_feed(self, location_id, **kwargs):
         """
@@ -712,11 +754,79 @@ class Client(object):
 
         :param location_id:
         :param kwargs:
-            - **max_id**: For pagination
+            - **count**: Number of records to return
+            - **end_cursor**: For pagination
         :return:
         """
-        query = {'__a': '1'}
-        if kwargs:
-            query.update(kwargs)
-        endpoint = 'https://www.instagram.com/explore/locations/{0!s}/'.format(location_id)
-        return self._make_request(endpoint, query=query)
+        count = kwargs.pop('count', 16)
+        end_cursor = kwargs.pop('end_cursor', None) or kwargs.pop('max_id', None)
+
+        variables = {
+            'id': location_id,
+            'first': int(count)
+        }
+        if end_cursor:
+            variables['after'] = end_cursor
+
+        query = {
+            'query_id': '17865274345132052',
+            'variables': json.dumps(variables, separators=(',', ':'))
+        }
+
+        return self._make_request(self.GRAPHQL_API_URL, query=query)
+
+    @login_required
+    def timeline_feed(self, **kwargs):
+        """
+        Get logged-in user's timeline feed.
+
+        :param kwargs:
+            - **count**: Number of records to return
+            - **end_cursor**: For pagination
+        """
+        end_cursor = kwargs.pop('end_cursor', None) or kwargs.pop('max_id', None)
+        fetch_media_item_count = int(kwargs.pop('count', 12))
+        fetch_comment_count = int(kwargs.pop('fetch_comment_count', 4))
+        fetch_like = int(kwargs.pop('fetch_like', 10))
+        has_stories = bool(kwargs.pop('has_stories', False))
+        variables = {
+            'fetch_media_item_count': fetch_media_item_count,
+            'fetch_comment_count': fetch_comment_count,
+            'fetch_like': fetch_like,
+            'has_stories': has_stories,
+        }
+        if end_cursor:
+            variables['fetch_media_item_cursor'] = end_cursor
+        query = {
+            'query_id': '17842794232208280',
+            'variables': json.dumps(variables, separators=(',', ':'))
+        }
+        return self._make_request(self.GRAPHQL_API_URL, query=query)
+
+    @login_required
+    def reels_tray(self):
+        """
+        Get a logged-in users reels tray.
+        """
+        query = {
+            'query_id': '17890626976041463',
+            'variables': json.dumps({}, separators=(',', ':'))
+        }
+        return self._make_request(self.GRAPHQL_API_URL, query=query)
+
+    @login_required
+    def reels_feed(self, reel_ids):
+        """
+        Get the stories feed for the specified user IDs
+
+        :param reel_ids: List of reel user IDs
+        """
+        variables = {
+            'reel_ids': reel_ids,
+            'precomposed_overlay': False,
+        }
+        query = {
+            'query_id': '17873473675158481',
+            'variables': json.dumps(variables, separators=(',', ':'))
+        }
+        return self._make_request(self.GRAPHQL_API_URL, query=query)

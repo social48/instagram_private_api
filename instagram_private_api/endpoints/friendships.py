@@ -23,6 +23,7 @@ class FriendshipsEndpointsMixin(object):
 
         :param user_id:
         :param kwargs:
+            - **query**: Search within the user following
             - **max_id**: For pagination
         :return:
         """
@@ -43,6 +44,7 @@ class FriendshipsEndpointsMixin(object):
 
         :param user_id:
         :param kwargs:
+            - **query**: Search within the user followers
             - **max_id**: For pagination
         :return:
         """
@@ -201,7 +203,7 @@ class FriendshipsEndpointsMixin(object):
 
     def friendships_unblock(self, user_id):
         """
-        Block a user
+        Unblock a user
 
         :param user_id: User id
         :return:

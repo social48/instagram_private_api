@@ -1,3 +1,8 @@
+# Copyright (c) 2017 https://github.com/ping
+#
+# This software is released under the MIT License.
+# https://opensource.org/licenses/MIT
+
 # -*- coding: utf-8 -*-
 
 import logging
@@ -19,10 +24,17 @@ from .compat import (
     compat_urllib_request, compat_urllib_parse_urlparse,
     compat_http_client)
 from .errors import (
-    ClientErrorCodes, ClientError, ClientLoginError,
+    ErrorHandler, ClientError,
     ClientLoginRequiredError, ClientCookieExpiredError,
-    ClientThrottledError, ClientConnectionError
+    ClientConnectionError
 )
+try:  # Python 3:
+    # Not a no-op, we're adding this to the namespace so it can be imported.
+    ConnectionError = ConnectionError
+except NameError:  # Python 2:
+    class ConnectionError(Exception):
+        pass
+
 from .constants import Constants
 from .cookiejar import ClientCookieJar
 from .endpoints import (
@@ -30,7 +42,7 @@ from .endpoints import (
     FriendshipsEndpointsMixin, LiveEndpointsMixin, MediaEndpointsMixin,
     MiscEndpointsMixin, LocationsEndpointsMixin, TagsEndpointsMixin,
     UsersEndpointsMixin, UploadEndpointsMixin, UsertagsEndpointsMixin,
-    CollectionsEndpointsMixin,
+    CollectionsEndpointsMixin, HighlightsEndpointsMixin,
     ClientDeprecationWarning, ClientPendingDeprecationWarning,
     ClientExperimentalWarning
 )
@@ -46,7 +58,7 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
              FriendshipsEndpointsMixin, LiveEndpointsMixin, MediaEndpointsMixin,
              MiscEndpointsMixin, LocationsEndpointsMixin, TagsEndpointsMixin,
              UsersEndpointsMixin, UploadEndpointsMixin, UsertagsEndpointsMixin,
-             CollectionsEndpointsMixin, object):
+             CollectionsEndpointsMixin, HighlightsEndpointsMixin, object):
     """Main API client class for the private app api."""
 
     API_URL = 'https://i.instagram.com/api/{version!s}/'
@@ -55,6 +67,7 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
     IG_SIG_KEY = Constants.IG_SIG_KEY
     IG_CAPABILITIES = Constants.IG_CAPABILITIES
     SIG_KEY_VERSION = Constants.SIG_KEY_VERSION
+    APPLICATION_ID = Constants.APPLICATION_ID
 
     def __init__(self, username, password, **kwargs):
         """
@@ -99,6 +112,9 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
         self.ig_capabilities = (
             kwargs.pop('ig_capabilities', None) or user_settings.get('ig_capabilities') or
             self.IG_CAPABILITIES)
+        self.application_id = (
+            kwargs.pop('application_id', None) or user_settings.get('application_id') or
+            self.APPLICATION_ID)
 
         # to maintain backward compat for user_agent kwarg
         custom_ua = kwargs.pop('user_agent', '') or user_settings.get('user_agent')
@@ -350,6 +366,11 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             'X-IG-Capabilities': self.ig_capabilities,
             'X-IG-Connection-Type': 'WIFI',
             'X-IG-Connection-Speed': '{0:d}kbps'.format(random.randint(1000, 5000)),
+            'X-IG-App-ID': self.application_id,
+            'X-IG-Bandwidth-Speed-KBPS': '-1.000',
+            'X-IG-Bandwidth-TotalBytes-B': '0',
+            'X-IG-Bandwidth-TotalTime-MS': '0',
+            'X-FB-HTTP-Engine': Constants.FB_HTTP_ENGINE,
         }
 
     @property
@@ -468,32 +489,14 @@ class Client(AccountsEndpointsMixin, DiscoverEndpointsMixin, FeedEndpointsMixin,
             self.logger.debug('DATA: {0!s}'.format(data))
             response = self.opener.open(req, timeout=self.timeout)
         except compat_urllib_error.HTTPError as e:
-            error_msg = e.reason
             error_response = self._read_response(e)
             self.logger.debug('RESPONSE: {0:d} {1!s}'.format(e.code, error_response))
-            try:
-                error_obj = json.loads(error_response)
-                if error_obj.get('message') == 'login_required':
-                    raise ClientLoginRequiredError(
-                        error_obj.get('message'), code=e.code,
-                        error_response=json.dumps(error_obj))
-                elif e.code == ClientErrorCodes.TOO_MANY_REQUESTS:
-                    raise ClientThrottledError(
-                        error_obj.get('message'), code=e.code,
-                        error_response=json.dumps(error_obj))
-                elif error_obj.get('message'):
-                    error_msg = '{0!s}: {1!s}'.format(e.reason, error_obj['message'])
-            except (ClientLoginError, ClientLoginRequiredError, ClientThrottledError):
-                raise
-            except ValueError as ex:
-                # do nothing else, prob can't parse json
-                self.logger.warn('Error parsing error response: {}'.format(str(ex)))
-            raise ClientError(error_msg, e.code, error_response)
+            ErrorHandler.process(e, error_response)
+
         except (SSLError, timeout, SocketError,
                 compat_urllib_error.URLError,   # URLError is base of HTTPError
-                compat_http_client.HTTPException) as connection_error:
-            # ConnectionError is py3-specific. Hm.
-            # https://docs.python.org/3/library/exceptions.html#ConnectionError
+                compat_http_client.HTTPException,
+                ConnectionError) as connection_error:
             raise ClientConnectionError('{} {}'.format(
                 connection_error.__class__.__name__, str(connection_error)))
 

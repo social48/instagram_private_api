@@ -162,6 +162,22 @@ class MediaTests(ApiTestBase):
                 'name': 'test_media_only_me_mock',
                 'test': MediaTests('test_media_only_me_mock', api)
             },
+            {
+                'name': 'test_comment_replies',
+                'test': MediaTests('test_comment_replies', api)
+            },
+            {
+                'name': 'test_comment_inline_replies',
+                'test': MediaTests('test_comment_inline_replies', api)
+            },
+            {
+                'name': 'test_story_viewers_mock',
+                'test': MediaTests('test_story_viewers_mock', api)
+            },
+            {
+                'name': 'test_story_viewers',
+                'test': MediaTests('test_story_viewers', api)
+            },
         ]
 
     def test_media_info(self):
@@ -202,6 +218,19 @@ class MediaTests(ApiTestBase):
         num_of_comments = 50
         results = self.api.media_n_comments(self.test_media_id, n=num_of_comments)
         self.assertGreaterEqual(len(results), num_of_comments, 'No comment returned.')
+
+    def test_comment_replies(self):
+        results = self.api.comment_replies(
+            '1652531711743017348_184692323', '17881229782160892')
+        self.assertGreater(
+            len(results.get('child_comments', [])), 0, 'No replies returned.')
+
+    def test_comment_inline_replies(self):
+        results = self.api.comment_inline_replies(
+            # max_id should not be '' but...
+            '1652531711743017348_184692323', '17881229782160892', max_id='')
+        self.assertGreater(
+            len(results.get('child_comments', [])), 0, 'No replies returned.')
 
     @unittest.skip('Modifies data.')
     def test_edit_media(self):
@@ -258,7 +287,7 @@ class MediaTests(ApiTestBase):
             'comment': {'created_at': '1234567890', 'pk': 100000,
                         'user': {'pk': 123, 'username': 'x', 'full_name': 'X', 'profile_pic_url': 'x.jpg'}}}
         media_id = '123_123'
-        comment_text = '<3'
+        comment_text = '<3 #heart https://google.com'
         breadcrumb = gen_user_breadcrumb(len(comment_text))
         generated_uuid = self.api.generate_uuid()
         with compat_mock.patch('instagram_private_api.endpoints.media.gen_user_breadcrumb') \
@@ -279,6 +308,16 @@ class MediaTests(ApiTestBase):
             call_api.assert_called_with(
                 'media/{media_id!s}/comment/'.format(**{'media_id': media_id}),
                 params=params)
+
+        test_comments = [
+            'x' * 301,      # Test max length
+            'X' * 300,      # Test all caps
+            '#test #test #test #test #test'     # Test hashtags limit
+            'https://google.com http://google.com'      # Test urls limit
+        ]
+        for t in test_comments:
+            with self.assertRaises(ValueError):
+                self.api.post_comment(media_id, t)
 
     @compat_mock.patch('instagram_private_api.Client._call_api')
     def test_delete_comment_mock(self, call_api):
@@ -528,3 +567,20 @@ class MediaTests(ApiTestBase):
         call_api.assert_called_with(
             'media/{media_id!s}/undo_only_me/'.format(**{'media_id': media_id}),
             params=params, query={'media_type': 2})
+
+    @compat_mock.patch('instagram_private_api.Client._call_api')
+    def test_story_viewers_mock(self, call_api):
+        call_api.return_value = {'status': 'ok'}
+        story_pk = '170000000'
+        self.api.story_viewers(story_pk)
+        call_api.assert_called_with(
+            'media/{story_pk!s}/list_reel_media_viewer/'.format(story_pk=story_pk),
+            query={})
+
+    @unittest.skip('Requires valid story PK.')
+    def test_story_viewers(self):
+        results = self.api.story_viewers('170000000123')
+        self.assertEqual(results.get('status'), 'ok')
+        self.assertIn('users', results)
+        self.assertIn('total_viewer_count', results)
+        self.assertIn('user_count', results)

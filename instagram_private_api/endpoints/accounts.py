@@ -1,9 +1,21 @@
 import json
 
-from ..compat import compat_urllib_request, compat_urllib_error
-from ..errors import ClientError, ClientLoginError
+from ..compat import (
+    compat_urllib_request, compat_urllib_error,
+    compat_http_client
+)
+from ..errors import (
+    ErrorHandler, ClientError, ClientLoginError, ClientConnectionError
+)
 from ..http import MultipartFormDataEncoder
 from ..compatpatch import ClientCompatPatch
+from socket import timeout, error as SocketError
+from ssl import SSLError
+try:
+    ConnectionError = ConnectionError
+except NameError:  # Python 2:
+    class ConnectionError(Exception):
+        pass
 
 
 class AccountsEndpointsMixin(object):
@@ -34,14 +46,8 @@ class AccountsEndpointsMixin(object):
             'login_attempt_count': '0',
         }
 
-        try:
-            login_response = self._call_api(
-                'accounts/login/', params=login_params, return_response=True)
-        except compat_urllib_error.HTTPError as e:
-            error_response = self._read_response(e)
-            if e.code == 400:
-                raise ClientLoginError('Unable to login: {0!s}'.format(e))
-            raise ClientError(e.reason, e.code, error_response)
+        login_response = self._call_api(
+            'accounts/login/', params=login_params, return_response=True)
 
         if not self.csrftoken:
             raise ClientError(
@@ -145,17 +151,14 @@ class AccountsEndpointsMixin(object):
             self.logger.debug('POST {0!s}'.format(endpoint_url))
             response = self.opener.open(req, timeout=self.timeout)
         except compat_urllib_error.HTTPError as e:
-            error_msg = e.reason
             error_response = self._read_response(e)
             self.logger.debug('RESPONSE: {0:d} {1!s}'.format(e.code, error_response))
-            try:
-                error_obj = json.loads(error_response)
-                if error_obj.get('message'):
-                    error_msg = '{0!s}: {1!s}'.format(e.reason, error_obj['message'])
-            except ValueError as e:
-                # do nothing else, prob can't parse json
-                self.logger.warn('Error parsing error response: {}'.format(str(e)))
-            raise ClientError(error_msg, e.code, error_response)
+            ErrorHandler.process(e, error_response)
+        except (SSLError, timeout, SocketError,
+                compat_urllib_error.URLError,   # URLError is base of HTTPError
+                compat_http_client.HTTPException) as connection_error:
+            raise ClientConnectionError('{} {}'.format(
+                connection_error.__class__.__name__, str(connection_error)))
 
         post_response = self._read_response(response)
         self.logger.debug('RESPONSE: {0:d} {1!s}'.format(response.code, post_response))
@@ -190,3 +193,32 @@ class AccountsEndpointsMixin(object):
             '_uuid': self.uuid
         }
         return self._call_api('accounts/logout/', params=params, unsigned=True)
+
+    def presence_status(self):
+        """Get presence status setting"""
+        json_params = json.dumps({}, separators=(',', ':'))
+        query = {
+            'ig_sig_key_version': self.key_version,
+            'signed_body': self._generate_signature(json_params) + '.' + json_params
+        }
+        return self._call_api('accounts/get_presence_disabled/', query=query)
+
+    def set_presence_status(self, disabled):
+        """
+        Set presence status setting
+
+        :param disabled: True if disabling, else False
+        """
+        params = {
+            'disabled': '1' if disabled else '0'
+        }
+        params.update(self.authenticated_params)
+        return self._call_api('accounts/set_presence_disabled/', params=params)
+
+    def enable_presence_status(self):
+        """Enable presence status setting"""
+        return self.set_presence_status(False)
+
+    def disable_presence_status(self):
+        """Disable presence status setting"""
+        return self.set_presence_status(True)
